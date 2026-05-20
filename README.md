@@ -59,6 +59,21 @@ ActiveSupport.on_load(:action_controller_base) do
 end
 ```
 
+### Serving from additional directories under a URL prefix
+
+Use `additional_directory_mappings` to serve files from extra directories, each under its own URL prefix:
+
+```ruby
+Rails.application.config.middleware.use Assiette::Server,
+  root: Rails.root.join("app/assets"),
+  additional_directory_mappings: {
+    "/vendor" => Rails.root.join("vendor/assets"),
+    "/icons"  => Rails.root.join("app/icons")
+  }
+```
+
+With this setup a file at `vendor/assets/datepicker.js` is served at `/vendor/datepicker.js`, while files in `app/assets` are served from the root (`/application.css`). You can combine multiple mappings in a single middleware instance.
+
 ## Usage inside a Rails engine (gem)
 
 Engines use `middleware.use` on the engine class, which scopes the middleware to requests that hit the engine's mount point. The `SCRIPT_NAME` is set automatically so view helpers resolve paths correctly.
