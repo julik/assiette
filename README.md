@@ -4,7 +4,7 @@
 
 It is a slightly unhinged Rails asset server. It will serve your SVG, images, CSS and JS allowing for true nobuild (but also noconfig) asset serving. See, importmaps-rails is not really "nobuild" - it has to be managed. With Assiette, you drop a file into your directory and you're off to the races.
 
-The approach is described in [this article](https://blog.julik.nl/2026/05/just-say-no-to-asset-pipelines)
+The approach is described in [this article](https://blog.julik.nl/2026/05/just-say-no-to-asset-pipelines) in more detail - this gem simply packages it in a library.
 
 Assiette does help with cache-busting and preloading:
 
