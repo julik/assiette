@@ -1,0 +1,19 @@
+# frozen_string_literal: true
+
+# Assiette serves static assets (JS, CSS, SVG, etc.) from your app with
+# cache headers, SRI integrity hashes, and automatic JS import rewriting.
+#
+# This file runs during :load_config_initializers, which is before the
+# middleware stack is frozen (:build_middleware_stack) in Rails 8.1+.
+
+# Serve files from app/assets (JS modules, CSS, SVGs, etc.)
+Rails.application.config.middleware.use(
+  Assiette::Server,
+  root: Rails.root.join("app/assets")
+)
+
+# Serve files from public/ (favicons, static images, etc.)
+Rails.application.config.middleware.use(
+  Assiette::Server,
+  root: Rails.root.join("public")
+)

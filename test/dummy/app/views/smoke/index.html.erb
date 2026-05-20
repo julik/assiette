@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="icon" href="data:,">
+  <%= assiette_stylesheet_tag("/application.css") %>
+  <%= assiette_modulepreload_tags %>
+  <script type="module" src="<%= assiette_asset_path("/js/root_a.js") %>"></script>
+</head>
+<body>
+  <h1>Smoke</h1>
+  <noscript><p>JavaScript is disabled</p></noscript>
+</body>
+</html>
