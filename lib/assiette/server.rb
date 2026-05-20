@@ -4,6 +4,8 @@ require "digest/sha1"
 require "digest/sha2"
 require "base64"
 require "pathname"
+require_relative "rewriter"
+require_relative "version_tag"
 
 module Assiette
   class Server
