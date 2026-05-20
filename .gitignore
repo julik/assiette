@@ -1,0 +1,7 @@
+/Gemfile.lock
+/log/
+/tmp/
+/pkg/
+/test/dummy/log/
+/test/dummy/tmp/
+/test/tmp/
