@@ -23,6 +23,5 @@ Gem::Specification.new do |spec|
     Dir["{app,config,lib}/**/*", "LICENSE.txt", "Rakefile"]
   end
 
-  spec.add_dependency "railties", ">= 7.2"
   spec.add_dependency "actionpack", ">= 7.2"
 end

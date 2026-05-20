@@ -52,6 +52,11 @@ Rails.application.config.middleware.use Assiette::Server,
 # Serve from public/ (favicons, static images)
 Rails.application.config.middleware.use Assiette::Server,
   root: Rails.root.join("public")
+
+# Make helpers available in all views
+ActiveSupport.on_load(:action_controller_base) do
+  helper Assiette::Helpers
+end
 ```
 
 ## Usage inside a Rails engine (gem)
@@ -85,7 +90,21 @@ then a file at `my_engine/public/app.css` is served at `/admin/app.css`.
 
 ## View helpers
 
-Assiette injects helpers into all ActionView contexts and ActionControllersautomatically.
+The install generator sets up the helpers automatically. If you configured Assiette manually, add this to your initializer so the helpers are available in all views:
+
+```ruby
+ActiveSupport.on_load(:action_controller_base) do
+  helper Assiette::Helpers
+end
+```
+
+If you only need the helpers in specific controllers, include them there instead:
+
+```ruby
+class SiteController < ApplicationController
+  helper Assiette::Helpers
+end
+```
 
 ```erb
 <%# Link a stylesheet with SRI integrity and version tag %>
