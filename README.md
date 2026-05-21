@@ -1,5 +1,7 @@
 # Assiette
 
+[![CI](https://github.com/julik/assiette/actions/workflows/ci.yml/badge.svg)](https://github.com/julik/assiette/actions/workflows/ci.yml)
+
 > L'assiette, c'est pour servir les assets.
 
 It is a slightly unhinged Rails asset server. It will serve your SVG, images, CSS and JS allowing for true nobuild (but also noconfig) asset serving. See, importmaps-rails is not really "nobuild" - it has to be managed. With Assiette, you drop a file into your directory and you're off to the races.
