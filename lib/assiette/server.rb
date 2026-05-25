@@ -16,7 +16,7 @@ module Assiette
 
     def call(env)
       stack = (env["assiette.stack"] ||= [])
-      stack << {server: @handler, script_name: env["SCRIPT_NAME"].to_s}
+      stack << {handler: @handler, script_name: env["SCRIPT_NAME"].to_s}
 
       result = serve(env)
       return result if result
