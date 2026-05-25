@@ -6,20 +6,28 @@
 # This file runs during :load_config_initializers, which is before the
 # middleware stack is frozen (:build_middleware_stack) in Rails 8.1+.
 
-# Serve files from app/assets (JS modules, CSS, SVGs, etc.)
-Rails.application.config.middleware.use(
-  Assiette::Server,
-  root: Rails.root.join("app/assets")
+# Build a single handler that knows about app/assets and public/, and share
+# it between the Rack middleware (which serves the files) and the Rails
+# asset helpers (which generate URLs).
+handler = Assiette::AssetHandler.new(
+  root: Rails.root.join("app/assets"),
+  additional_directory_mappings: {
+    "/" => Rails.root.join("public")
+  }
 )
 
-# Serve files from public/ (favicons, static images, etc.)
-Rails.application.config.middleware.use(
-  Assiette::Server,
-  root: Rails.root.join("public")
-)
+# Serve files through the shared handler.
+Rails.application.config.middleware.use Assiette::Server, handler
 
-# Make assiette_asset_path, assiette_stylesheet_tag, and
-# assiette_modulepreload_tags available in all views.
+# Make the standard Rails asset helpers (asset_path, image_tag,
+# stylesheet_link_tag, javascript_include_tag, ...) resolve paths through
+# Assiette and pick up its ?v= cache-busting tag. Unknown assets fall back
+# to Rails' default behavior. Remove this line if you'd rather use only
+# the assiette_* helpers below.
+Rails.application.assets = handler
+
+# Also expose assiette_asset_path, assiette_stylesheet_tag, and
+# assiette_modulepreload_tags for templates that want them directly.
 ActiveSupport.on_load(:action_controller_base) do
   helper Assiette::Helpers
 end

@@ -7,7 +7,7 @@ module Assiette
     def assiette_asset_path(path)
       entry = request.env["assiette.stack"]&.last
       raise "No Assiette::Server in middleware stack" unless entry
-      entry[:server].absolute_asset_url_path(path, entry[:script_name])
+      entry[:handler].absolute_asset_url_path(path, entry[:script_name])
     end
 
     # Returns the SRI integrity hash for an asset, computed over the served
@@ -15,7 +15,7 @@ module Assiette
     def assiette_asset_integrity(path)
       entry = request.env["assiette.stack"]&.last
       raise "No Assiette::Server in middleware stack" unless entry
-      entry[:server].asset_integrity(path)
+      entry[:handler].asset_integrity(path)
     end
 
     # Generates a <link rel="stylesheet"> tag with SRI integrity.
@@ -30,7 +30,7 @@ module Assiette
     def assiette_modulepreload_tags
       entry = request.env["assiette.stack"]&.last
       raise "No Assiette::Server in middleware stack" unless entry
-      modules = entry[:server].js_modules
+      modules = entry[:handler].js_modules
       safe_join(modules.map { |mod|
         tag.link(rel: "modulepreload", href: assiette_asset_path(mod[:path]),
           integrity: mod[:integrity], crossorigin: "anonymous")
