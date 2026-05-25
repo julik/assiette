@@ -38,7 +38,7 @@ Then run the install generator:
 bin/rails generate assiette:install
 ```
 
-This creates `config/initializers/assiette.rb` which sets up middleware for `app/assets` and `public/`. But if you feel truly minimal, you can set up Assiette in your `config/application.rb` instead.
+This creates `config/initializers/assiette.rb` which serves files from `app/assets` and `public/` and wires Assiette into the standard Rails asset helpers (see [Rails asset pipeline integration](#rails-asset-pipeline-integration) below). If you'd prefer a lighter-touch setup, or want to configure things by hand, see the [Manual setup](#manual-setup) and [Mode 1](#mode-1-assiette-alongside-rails) sections.
 
 ### Manual setup
 
@@ -149,6 +149,80 @@ Renders a `<link rel="stylesheet">` tag with `integrity` and `crossorigin` attri
 ### `assiette_modulepreload_tags`
 
 Scans the asset roots for `.js`/`.mjs` files containing ES `import`/`export` statements and renders `<link rel="modulepreload">` tags for each, with SRI integrity hashes.
+
+## Rails asset pipeline integration
+
+Assiette can be used in two modes. Pick the one that fits how much of Rails' asset machinery you want it to take over.
+
+### Mode 2: Assiette as the Rails asset resolver (default)
+
+This is what the install generator sets up. Assigning an `Assiette::AssetHandler` to `Rails.application.assets` is the single switch that flips mode 2 on — the helper override is wired into `ActionView` by the Railtie and is inert until that assignment happens. The standard Rails asset helpers — `asset_path`, `image_tag`, `stylesheet_link_tag`, `javascript_include_tag` — then resolve paths through Assiette and pick up its `?v=` cache-busting tag automatically. Assets Assiette cannot resolve fall through to Rails' default behavior, so this mode is safe to mix with fonts or other files Rails serves directly.
+
+Use this when:
+
+- Assiette is your asset pipeline. You're not running Sprockets or Propshaft, and you'd rather write `image_tag "logo.svg"` than `assiette_asset_path "/logo.svg"`.
+- You want existing Rails code (gems, view partials, scaffolds) to pick up Assiette's version tag without rewriting every `asset_path` call.
+
+The handler is built once and shared between the middleware and the view helpers, so both resolve files the same way:
+
+```ruby
+# config/initializers/assiette.rb
+
+handler = Assiette::AssetHandler.new(
+  root: Rails.root.join("app/assets"),
+  additional_directory_mappings: {
+    "/" => Rails.root.join("public")
+  }
+)
+
+# Serve files through the shared handler
+Rails.application.config.middleware.use Assiette::Server, handler
+
+# Make the Rails asset helpers resolve through the same handler.
+# This single assignment is what flips Assiette into "mode 2".
+Rails.application.assets = handler
+
+# Also expose assiette_asset_path, assiette_stylesheet_tag, etc.
+ActiveSupport.on_load(:action_controller_base) do
+  helper Assiette::Helpers
+end
+```
+
+```erb
+<%= image_tag "logo.svg" %>
+<%# => <img src="/logo.svg?v=...">
+
+<%= stylesheet_link_tag "app" %>
+<%# => <link rel="stylesheet" href="/app.css?v=...">
+```
+
+`Assiette::RailsAssetUrlHelper` overrides `compute_asset_path` and only kicks in when `Rails.application.assets` is an `Assiette::AssetHandler` — if you leave it unset (or set it back to `nil`), the helper is inert and the standard Rails resolution path runs. The Railtie includes the helper module into `ActionView` for you; you only need to opt in by assigning the handler.
+
+### Mode 1: Assiette alongside Rails
+
+In this mode Assiette serves files through its Rack middleware, and you use its `assiette_*` view helpers explicitly. The standard Rails helpers (`asset_path`, `image_tag`, `stylesheet_link_tag`, `javascript_include_tag`) keep going through whatever you have configured upstream — Sprockets, Propshaft, or nothing. `Rails.application.assets` is left alone.
+
+Use this when:
+
+- You want Assiette to coexist with an existing asset pipeline (Sprockets, Propshaft, importmap-rails).
+- You only want Assiette to handle a subset of your assets, and you are happy calling `assiette_stylesheet_tag` / `assiette_asset_path` directly in templates.
+- You are mounting Assiette inside an engine and don't want it to touch the host application's helpers.
+
+```ruby
+# config/initializers/assiette.rb
+
+Rails.application.config.middleware.use Assiette::Server,
+  root: Rails.root.join("app/assets")
+
+ActiveSupport.on_load(:action_controller_base) do
+  helper Assiette::Helpers
+end
+```
+
+```erb
+<%= assiette_stylesheet_tag "/app.css" %>
+<%= image_tag "logo.svg" %> <%# still goes through Sprockets/Propshaft/etc. %>
+```
 
 ## Cache busting
 
