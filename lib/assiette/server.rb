@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative "asset_handler"
-
 module Assiette
   class Server
     CACHE_CONTROL = "public, max-age=432000, must-revalidate"

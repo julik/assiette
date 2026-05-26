@@ -1,13 +1,13 @@
 # frozen_string_literal: true
 
 require_relative "assiette/version"
-require_relative "assiette/version_tag"
-require_relative "assiette/rewriter"
-require_relative "assiette/asset_handler"
-require_relative "assiette/server"
-require_relative "assiette/helpers"
-require_relative "assiette/rails_asset_url_helper"
-require_relative "assiette/railtie" if defined?(Rails::Railtie)
 
 module Assiette
+  autoload :Rewriter, File.expand_path("assiette/rewriter", __dir__)
+  autoload :AssetHandler, File.expand_path("assiette/asset_handler", __dir__)
+  autoload :Server, File.expand_path("assiette/server", __dir__)
+  autoload :Helpers, File.expand_path("assiette/helpers", __dir__)
+  autoload :RailsAssetUrlHelper, File.expand_path("assiette/rails_asset_url_helper", __dir__)
 end
+
+require_relative "assiette/railtie" if defined?(Rails::Railtie)
