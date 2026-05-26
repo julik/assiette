@@ -46,6 +46,8 @@ class DependencyGraphTest < ActiveSupport::TestCase
   end
 
   test "Asset#dependents lists reverse dependency url_paths" do
+    # Access the dependent first so it gets loaded into the graph
+    @graph["js/mid/alpha.js"]
     asset = @graph["js/leaf/alpha_one.js"]
     assert_includes asset.dependents, "js/mid/alpha.js"
   end
@@ -58,7 +60,23 @@ class DependencyGraphTest < ActiveSupport::TestCase
   test "standalone Asset has empty deps and dependents" do
     asset = @graph["js/root_b.js"]
     assert_empty asset.deps
+    # With lazy loading, dependents only populated when the dependent is loaded
+    # root_b.js has no dependents in the fixture set, so this holds regardless
     assert_empty asset.dependents
+  end
+
+  test "unreferenced files are not loaded into the graph" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "main.js"), 'console.log("main")')
+      File.write(File.join(dir, "orphan.js"), 'console.log("orphan")')
+      handler = Assiette::AssetHandler.new(root: dir)
+      graph = handler.dependency_graph
+
+      assert graph.tree_sha("main.js"), "main.js should be resolvable"
+      assets = graph.instance_variable_get(:@assets)
+      assert assets.key?("main.js"), "main.js should be in the graph"
+      refute assets.key?("orphan.js"), "orphan.js should not be loaded into the graph"
+    end
   end
 
   # --- tree_sha / tree_integrity convenience methods ---
