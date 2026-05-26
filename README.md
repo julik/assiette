@@ -10,7 +10,7 @@ The approach is described in [this article](https://blog.julik.nl/2026/05/just-s
 
 Assiette does help with cache-busting and preloading:
 
-- Cache-busting version tags (`?v=...`)
+- Content-hash cache busting (`?s=...`)
 - Automatic rewriting of relative `import` paths in JS and `url()` in CSS
 - SRI integrity hashes
 - `<link rel="modulepreload">` generation for all detected ES modules
@@ -124,7 +124,7 @@ end
 ```
 
 ```erb
-<%# Link a stylesheet with SRI integrity and version tag %>
+<%# Link a stylesheet with SRI integrity and content hash %>
 <%= assiette_stylesheet_tag "/app.css" %>
 
 <%# Get a cache-busted asset URL %>
@@ -136,7 +136,7 @@ end
 
 ### `assiette_asset_path(path)`
 
-Returns the URL path with a `?v=` cache-busting tag appended.
+Returns the URL path with a `?s=` cache-busting content hash appended.
 
 ### `assiette_asset_integrity(path)`
 
@@ -156,12 +156,12 @@ Assiette can be used in two modes. Pick the one that fits how much of Rails' ass
 
 ### Mode 2: Assiette as the Rails asset resolver (default)
 
-This is what the install generator sets up. Assigning an `Assiette::AssetHandler` to `Rails.application.assets` is the single switch that flips mode 2 on — the helper override is wired into `ActionView` by the Railtie and is inert until that assignment happens. The standard Rails asset helpers — `asset_path`, `image_tag`, `stylesheet_link_tag`, `javascript_include_tag` — then resolve paths through Assiette and pick up its `?v=` cache-busting tag automatically. Assets Assiette cannot resolve fall through to Rails' default behavior, so this mode is safe to mix with fonts or other files Rails serves directly.
+This is what the install generator sets up. Assigning an `Assiette::AssetHandler` to `Rails.application.assets` is the single switch that flips mode 2 on — the helper override is wired into `ActionView` by the Railtie and is inert until that assignment happens. The standard Rails asset helpers — `asset_path`, `image_tag`, `stylesheet_link_tag`, `javascript_include_tag` — then resolve paths through Assiette and pick up its `?s=` cache-busting content hash automatically. Assets Assiette cannot resolve fall through to Rails' default behavior, so this mode is safe to mix with fonts or other files Rails serves directly.
 
 Use this when:
 
 - Assiette is your asset pipeline. You're not running Sprockets or Propshaft, and you'd rather write `image_tag "logo.svg"` than `assiette_asset_path "/logo.svg"`.
-- You want existing Rails code (gems, view partials, scaffolds) to pick up Assiette's version tag without rewriting every `asset_path` call.
+- You want existing Rails code (gems, view partials, scaffolds) to pick up Assiette's content hash without rewriting every `asset_path` call.
 
 The handler is built once and shared between the middleware and the view helpers, so both resolve files the same way:
 
@@ -190,10 +190,10 @@ end
 
 ```erb
 <%= image_tag "logo.svg" %>
-<%# => <img src="/logo.svg?v=...">
+<%# => <img src="/logo.svg?s=...">
 
 <%= stylesheet_link_tag "app" %>
-<%# => <link rel="stylesheet" href="/app.css?v=...">
+<%# => <link rel="stylesheet" href="/app.css?s=...">
 ```
 
 `Assiette::RailsAssetUrlHelper` overrides `compute_asset_path` and only kicks in when `Rails.application.assets` is an `Assiette::AssetHandler` — if you leave it unset (or set it back to `nil`), the helper is inert and the standard Rails resolution path runs. The Railtie includes the helper module into `ActionView` for you; you only need to opt in by assigning the handler.
@@ -226,13 +226,15 @@ end
 
 ## Cache busting
 
-The version tag is computed once per boot:
+The content hash is computed once per boot in production, and fresh on every request in development:
 
-- **Development:** current timestamp (changes every request)
+- **Development:** current timestamp (changes every request, not memoized)
 - **Production with `APP_REVISION`:** derived from the env var
 - **Production without:** derived from `Gemfile.lock` digest
 
-Relative imports in JS (`./foo.js`, `../bar.js`) and `url()` references in CSS are automatically rewritten to include the version tag, so the entire dependency graph busts together.
+Relative imports in JS (`./foo.js`, `../bar.js`) and `url()` references in CSS are automatically rewritten to include the content hash, so the entire dependency graph busts together.
+
+SRI integrity hashes are cached per file using `File.mtime` as a cache key, so they are recomputed automatically when files change on disk — no server restart needed.
 
 ## License
 

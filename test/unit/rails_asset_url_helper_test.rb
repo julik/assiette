@@ -19,7 +19,7 @@ class RailsAssetUrlHelperTest < ActiveSupport::TestCase
     Rails.application.assets = @handler
     helper = build_helper
     result = helper.compute_asset_path("application.css", {})
-    assert_match %r{application\.css\?v=}, result
+    assert_match %r{application\.css\?s=[0-9a-f]{8}}, result
   end
 
   test "compute_asset_path falls back to super for unknown asset" do
@@ -27,7 +27,7 @@ class RailsAssetUrlHelperTest < ActiveSupport::TestCase
     helper = build_helper
     result = helper.compute_asset_path("unknown.woff2", type: :font)
     assert_includes result, "unknown.woff2"
-    refute_includes result, "?v="
+    refute_includes result, "?s="
   end
 
   test "compute_asset_path falls back when no handler is configured" do
@@ -35,7 +35,7 @@ class RailsAssetUrlHelperTest < ActiveSupport::TestCase
     helper = build_helper
     result = helper.compute_asset_path("application.css", {})
     assert_includes result, "application.css"
-    refute_includes result, "?v="
+    refute_includes result, "?s="
   end
 
   private

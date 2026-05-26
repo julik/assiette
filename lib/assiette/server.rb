@@ -45,16 +45,7 @@ module Assiette
         return [304, {"etag" => etag, "cache-control" => CACHE_CONTROL}, []]
       end
 
-      query = Rack::Utils.parse_query(env["QUERY_STRING"])
-      tag = query["v"].to_s.empty? ? Assiette.version_tag : query["v"]
-
-      body = if AssetHandler::JS_EXTENSIONS.include?(extension)
-        Rewriter.rewrite_js_imports(raw_bytes, tag)
-      elsif extension == ".css"
-        Rewriter.rewrite_css_urls(raw_bytes, tag)
-      else
-        raw_bytes
-      end
+      body = @handler.dependency_graph.rewrite_content(path_info, raw_bytes)
 
       headers = {
         "content-type" => content_type,

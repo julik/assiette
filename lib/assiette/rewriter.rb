@@ -15,16 +15,37 @@ module Assiette
 
     module_function
 
-    def rewrite_js_imports(source, version_tag)
+    # Rewrites JS imports with per-import hashes via a block.
+    # The block receives the import path and must return the hash for that import.
+    def rewrite_js_imports(source, &block)
       source.gsub(JS_IMPORT_RE) do
-        "#{$1}#{$2}?v=#{version_tag}#{$1}"
+        quote = $1
+        path = $2
+        hash = yield(path)
+        "#{quote}#{path}?s=#{hash}#{quote}"
       end
     end
 
-    def rewrite_css_urls(source, version_tag)
+    # Rewrites CSS url() references with per-url hashes via a block.
+    # The block receives the url path and must return the hash for that url.
+    def rewrite_css_urls(source, &block)
       source.gsub(CSS_URL_RE) do
-        "url(#{$1}#{$2}?v=#{version_tag}#{$3})"
+        open = $1
+        path = $2
+        close = $3
+        hash = yield(path)
+        "url(#{open}#{path}?s=#{hash}#{close})"
       end
+    end
+
+    # Returns an array of import paths found in JS source.
+    def extract_js_imports(source)
+      source.scan(JS_IMPORT_RE).map { |m| m[1] }
+    end
+
+    # Returns an array of url() paths found in CSS source.
+    def extract_css_urls(source)
+      source.scan(CSS_URL_RE).map { |m| m[1] }
     end
   end
 end
