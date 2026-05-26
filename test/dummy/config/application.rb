@@ -8,7 +8,7 @@ require "action_dispatch/railtie"
 require "rails/test_unit/railtie"
 
 Bundler.require(*Rails.groups)
-require "assiette"
+require "assiette" # All Assiette modules auto-resolve from here
 
 module Dummy
   class Application < Rails::Application

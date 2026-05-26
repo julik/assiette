@@ -88,7 +88,7 @@ module MyEngine
     isolate_namespace MyEngine
 
     initializer "my_engine.assets", before: :build_middleware_stack do |app|
-      require "assiette/server"
+      require "assiette" # All Assiette modules auto-resolve from here
       middleware.use Assiette::Server, root: Engine.root.join("public")
     end
   end
