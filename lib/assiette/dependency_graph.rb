@@ -3,7 +3,6 @@
 require "digest/sha2"
 require "base64"
 require "pathname"
-require "set"
 
 module Assiette
   class DependencyGraph
@@ -209,7 +208,7 @@ module Assiette
       # Remove old reverse links
       asset.deps.each do |dep_path|
         dep = @assets[dep_path]
-        dep.dependents.delete(url_path) if dep
+        dep&.dependents&.delete(url_path)
       end
 
       # Re-parse imports
@@ -304,7 +303,7 @@ module Assiette
 
       asset.deps.each do |dep_path|
         dep = @assets[dep_path]
-        dep.dependents.delete(url_path) if dep
+        dep&.dependents&.delete(url_path)
       end
     end
   end
