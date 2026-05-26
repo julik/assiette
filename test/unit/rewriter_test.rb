@@ -38,7 +38,7 @@ class RewriterTest < ActiveSupport::TestCase
   test "JS: block receives each import path and uses its return value" do
     source = 'import "./a.js"\nimport "./b.js"'
     result = Assiette::Rewriter.rewrite_js_imports(source) { |path|
-      path == "./a.js" ? "hash_a" : "hash_b"
+      (path == "./a.js") ? "hash_a" : "hash_b"
     }
     assert_includes result, "./a.js?s=hash_a"
     assert_includes result, "./b.js?s=hash_b"

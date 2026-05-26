@@ -93,6 +93,5 @@ module Assiette
       end
       mappings
     end
-
   end
 end
