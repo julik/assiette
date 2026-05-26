@@ -37,24 +37,17 @@ module Assiette
       file_path = @handler.resolve_file(path_info)
       return unless file_path
 
-      raw_bytes = File.binread(file_path)
-
-      # ETag from raw bytes for stability
-      etag = %("#{Digest::SHA1.hexdigest(raw_bytes)}")
+      # Use the dependency graph's content hash for the ETag — it reflects
+      # the file's own content plus all its transitive dependencies, and is
+      # already computed as part of serving. This lets us short-circuit with
+      # a 304 before reading the file for rewriting.
+      etag = %("#{@handler.dependency_graph.tree_sha(path_info) || "0"}")
       if env["HTTP_IF_NONE_MATCH"] == etag
         return [304, {"etag" => etag, "cache-control" => CACHE_CONTROL}, []]
       end
 
-      query = Rack::Utils.parse_query(env["QUERY_STRING"])
-      tag = query["v"].to_s.empty? ? Assiette.version_tag : query["v"]
-
-      body = if AssetHandler::JS_EXTENSIONS.include?(extension)
-        Rewriter.rewrite_js_imports(raw_bytes, tag)
-      elsif extension == ".css"
-        Rewriter.rewrite_css_urls(raw_bytes, tag)
-      else
-        raw_bytes
-      end
+      raw_bytes = File.binread(file_path)
+      body = @handler.dependency_graph.rewrite_content(path_info, raw_bytes)
 
       headers = {
         "content-type" => content_type,

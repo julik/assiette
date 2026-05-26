@@ -1,10 +1,6 @@
 # frozen_string_literal: true
 
-require "digest/sha1"
-require "digest/sha2"
-require "base64"
 require "pathname"
-require_relative "version_tag"
 
 module Assiette
   class AssetHandler
@@ -19,13 +15,28 @@ module Assiette
 
     JS_EXTENSIONS = %w[.js .mjs].to_set.freeze
 
+    attr_reader :dependency_graph
+
     def initialize(root:, additional_directory_mappings: {})
       @mappings = build_mappings(root, additional_directory_mappings)
-      @integrity_cache = {}
-      @integrity_mutex = Mutex.new
-      @modules_cache = nil
-      @modules_mutex = Mutex.new
-      @modules_version = nil
+      @dependency_graph = DependencyGraph.new(self)
+    end
+
+    # Yields (url_path, abs_path) for every file with a recognized extension.
+    def each_mapped_file
+      @mappings.each do |prefix, root|
+        CONTENT_TYPES.each_key do |ext|
+          Dir[File.join(root, "**/*#{ext}")].each do |abs|
+            relative = Pathname.new(abs).relative_path_from(root).to_s
+            url_path = if prefix.empty?
+              relative
+            else
+              "#{prefix}/#{relative}"
+            end
+            yield url_path, abs
+          end
+        end
+      end
     end
 
     def resolve_file(path)
@@ -51,40 +62,25 @@ module Assiette
     def absolute_asset_url_path(path, script_name = "")
       clean = path.sub(%r{\A/}, "")
       return nil unless resolve_file(clean)
-      "#{script_name}/#{clean}?v=#{Assiette.version_tag}"
+      hash = @dependency_graph.tree_sha(clean) || "00000000"
+      "#{script_name}/#{clean}?s=#{hash}"
     end
 
     def asset_integrity(path)
-      version_tag = Assiette.version_tag
-      @integrity_mutex.synchronize do
-        if @integrity_version != version_tag
-          @integrity_cache = {}
-          @integrity_version = version_tag
-        end
-        return @integrity_cache[path] if @integrity_cache.key?(path)
-
-        clean = path.sub(%r{\A/}, "")
-        @integrity_cache[path] = compute_integrity(clean, version_tag)
-      end
+      clean = path.sub(%r{\A/}, "")
+      return nil unless resolve_file(clean)
+      @dependency_graph.tree_integrity(clean)
     end
 
     def js_modules
-      version_tag = Assiette.version_tag
-      @modules_mutex.synchronize do
-        return @modules_cache if @modules_version == version_tag
-
-        @modules_cache = @mappings.flat_map { |prefix, root|
-          Dir[File.join(root, "**/*.{js,mjs}")].filter_map { |abs|
-            next unless File.foreach(abs).any? { |line| line.match?(/\A\s*(import|export)\s/) }
-            relative = Pathname.new(abs).relative_path_from(root).to_s
-            mod_path = "/#{"#{prefix}/" unless prefix.empty?}#{relative}".squeeze("/")
-            {path: mod_path, integrity: asset_integrity(mod_path)}
-          }
-        }.uniq { |m| m[:path] }.sort_by { |m| m[:path] }
-
-        @modules_version = version_tag
-        @modules_cache
-      end
+      @mappings.flat_map { |prefix, root|
+        Dir[File.join(root, "**/*.{js,mjs}")].filter_map { |abs|
+          next unless File.foreach(abs).any? { |line| line.match?(/\A\s*(import|export)\s/) }
+          relative = Pathname.new(abs).relative_path_from(root).to_s
+          mod_path = "/#{"#{prefix}/" unless prefix.empty?}#{relative}".squeeze("/")
+          {path: mod_path, integrity: asset_integrity(mod_path)}
+        }
+      }.uniq { |m| m[:path] }.sort_by { |m| m[:path] }
     end
 
     private
@@ -96,20 +92,6 @@ module Assiette
         mappings << [clean_prefix, Pathname.new(path).expand_path]
       end
       mappings
-    end
-
-    def compute_integrity(clean, version_tag)
-      file_path = resolve_file(clean)
-      return nil unless file_path
-
-      raw = File.read(file_path)
-      ext = File.extname(clean)
-      served = case ext
-      when ".js", ".mjs" then Rewriter.rewrite_js_imports(raw, version_tag)
-      when ".css" then Rewriter.rewrite_css_urls(raw, version_tag)
-      else raw
-      end
-      "sha256-#{Base64.strict_encode64(Digest::SHA256.digest(served))}"
     end
   end
 end

@@ -59,71 +59,82 @@ class AssetsTest < ActionDispatch::IntegrationTest
     assert_includes response.headers["Cache-Control"], "public"
   end
 
-  # --- Import rewriting cascades through the dependency graph ---
+  # --- Import rewriting with per-file content hashes ---
 
-  test "rewrites root module imports with version tag" do
-    get "/js/root_a.js?v=abc"
+  test "rewrites root module imports with per-dep content hashes" do
+    get "/js/root_a.js"
     assert_response :success
-    assert_includes response.body, './mid/alpha.js?v=abc"'
-    assert_includes response.body, './mid/beta.js?v=abc"'
-    assert_includes response.body, './mid/gamma.js?v=abc"'
+    # Each import gets its own 8-char hex hash
+    assert_match %r{./mid/alpha\.js\?s=[0-9a-f]{8}"}, response.body
+    assert_match %r{./mid/beta\.js\?s=[0-9a-f]{8}"}, response.body
+    assert_match %r{./mid/gamma\.js\?s=[0-9a-f]{8}"}, response.body
   end
 
-  test "rewrites mid-level dot-dot imports with version tag" do
-    get "/js/mid/alpha.js?v=xyz"
+  test "rewrites mid-level imports with per-dep content hashes" do
+    get "/js/mid/alpha.js"
     assert_response :success
-    assert_includes response.body, '../leaf/alpha_one.js?v=xyz"'
-    assert_includes response.body, '../leaf/alpha_two.js?v=xyz"'
+    assert_match %r{\.\./leaf/alpha_one\.js\?s=[0-9a-f]{8}"}, response.body
+    assert_match %r{\.\./leaf/alpha_two\.js\?s=[0-9a-f]{8}"}, response.body
+  end
+
+  test "each import gets its own unique hash" do
+    get "/js/mid/alpha.js"
+    assert_response :success
+    alpha_one_hash = response.body[/alpha_one\.js\?s=([0-9a-f]{8})/, 1]
+    alpha_two_hash = response.body[/alpha_two\.js\?s=([0-9a-f]{8})/, 1]
+    assert alpha_one_hash, "alpha_one hash should be present"
+    assert alpha_two_hash, "alpha_two hash should be present"
+    assert_not_equal alpha_one_hash, alpha_two_hash, "Different files should have different hashes"
   end
 
   test "leaf modules have no imports to rewrite" do
-    get "/js/leaf/alpha_one.js?v=tag1"
+    get "/js/leaf/alpha_one.js"
     assert_response :success
-    assert_not_includes response.body, "?v=tag1"
-  end
-
-  test "rewrites imports even without explicit version tag in request" do
-    get "/js/root_a.js"
-    assert_response :success
-    assert_includes response.body, "?v="
+    assert_not_includes response.body, "?s="
   end
 
   test "standalone root module is served without import rewriting" do
-    get "/js/root_b.js?v=nope"
+    get "/js/root_b.js"
     assert_response :success
-    assert_not_includes response.body, "?v=nope"
+    assert_not_includes response.body, "?s="
   end
 
   # --- CSS rewriting ---
 
-  test "does not rewrite CSS without url() even with version tag" do
-    get "/application.css?v=abc123"
+  test "does not rewrite CSS without url()" do
+    get "/application.css"
     assert_response :success
-    assert_not_includes response.body, "?v="
+    assert_not_includes response.body, "?s="
   end
 
-  test "rewrites url() in CSS when version tag is present" do
-    get "/test_with_url.css?v=r42"
-    assert_response :success
-    assert_equal "text/css", response.media_type
-    assert_includes response.body, "url(./images/icon.svg?v=r42)"
-  end
-
-  test "rewrites url() in CSS even without explicit version tag" do
+  test "rewrites url() in CSS with content hash" do
     get "/test_with_url.css"
     assert_response :success
-    assert_includes response.body, "?v="
+    assert_equal "text/css", response.media_type
+    assert_match %r{url\(./images/icon\.svg\?s=[0-9a-f]{8}\)}, response.body
   end
 
   # --- ETag stability ---
 
-  test "etag is stable regardless of version tag" do
-    get "/js/root_a.js?v=v1"
+  test "etag is stable across requests" do
+    get "/js/root_a.js"
     etag_v1 = response.headers["ETag"]
 
-    get "/js/root_a.js?v=v2"
+    get "/js/root_a.js"
     etag_v2 = response.headers["ETag"]
 
-    assert_equal etag_v1, etag_v2, "ETag should be computed from the raw file, not the rewritten content"
+    assert_equal etag_v1, etag_v2, "ETag should be stable for the same raw file"
+  end
+
+  # --- Query string is ignored for rewriting ---
+
+  test "query string s= param does not affect rewriting" do
+    get "/js/root_a.js"
+    body_without = response.body
+
+    get "/js/root_a.js?s=anything"
+    body_with = response.body
+
+    assert_equal body_without, body_with, "Rewriting should use dependency graph, not query param"
   end
 end
