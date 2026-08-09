@@ -9,6 +9,7 @@ module Assiette
   autoload :Server, File.expand_path("assiette/server", __dir__)
   autoload :Helpers, File.expand_path("assiette/helpers", __dir__)
   autoload :RailsAssetUrlHelper, File.expand_path("assiette/rails_asset_url_helper", __dir__)
+  autoload :ControllerEtag, File.expand_path("assiette/controller_etag", __dir__)
 end
 
 require_relative "assiette/railtie" if defined?(Rails::Railtie)

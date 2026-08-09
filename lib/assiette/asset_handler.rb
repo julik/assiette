@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "pathname"
+require "digest/sha2"
 
 module Assiette
   class AssetHandler
@@ -83,7 +84,51 @@ module Assiette
       }.uniq { |m| m[:path] }.sort_by { |m| m[:path] }
     end
 
+    # A single 16-char hex hash covering every asset this handler can serve.
+    # Fold it into a page's ETag and the page stops validating as soon as any
+    # Assiette URL on it would come out different.
+    #
+    # This is not a sweep over every mapped file — it hashes the dependency
+    # graph's apexes, whose digests already fold in everything they reach.
+    def digest
+      ensure_graph_populated!
+      combined = Digest::SHA256.new
+      @dependency_graph.apex_paths.each do |url_path|
+        combined << url_path << "\0" << @dependency_graph.tree_sha(url_path).to_s << "\0"
+      end
+      combined.hexdigest[0, 16]
+    end
+
     private
+
+    # The apex set is only meaningful over a fully populated graph, and the
+    # graph is lazy — asking it opportunistically gives different answers
+    # depending on what has been requested so far, which would have two Puma
+    # workers computing different ETags for identical content.
+    #
+    # The walk is amortised behind a directory-mtime guard rather than a glob
+    # per call. Directory mtimes move when an entry is added, removed or
+    # renamed — exactly the events that change the file list. Editing a file in
+    # place does not move them, and does not need to: the graph checks per-file
+    # mtimes on every access.
+    def ensure_graph_populated!
+      return if walked_directories_unchanged?
+      walked = {}
+      each_mapped_file do |url_path, abs_path|
+        @dependency_graph[url_path]
+        dir = File.dirname(abs_path)
+        walked[dir] ||= File.mtime(dir)
+      end
+      @dependency_graph.prune_deleted!
+      @walked_directories = walked
+    end
+
+    def walked_directories_unchanged?
+      return false unless @walked_directories
+      @walked_directories.all? { |dir, mtime| File.mtime(dir) == mtime }
+    rescue Errno::ENOENT
+      false
+    end
 
     def build_mappings(root, additional_directory_mappings)
       mappings = [["", Pathname.new(root).expand_path]]
