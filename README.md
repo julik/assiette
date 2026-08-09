@@ -232,6 +232,109 @@ Every served file gets a content-based fingerprint — a short hex hash derived 
 
 The dependency graph behind this is built lazily. Only files that are actually requested (and their transitive imports) are ever scanned and hashed. If you have two thousand orphan files sitting in your asset directories that nobody imports or requests, they are never touched. Staleness is tracked per-file using `File.mtime`, so when you save a file in your editor, the next request picks up the change automatically. No restart, no recompile, no nothing.
 
+### Cache busting the HTML that links your assets
+
+> **TL;DR** — if any of your controllers call `fresh_when` or `stale?`, you almost certainly want `include_assiette_etags!` in your `ApplicationController`. Without it, those responses keep validating after you edit an asset, and clients keep being handed HTML that links the previous `?s=` hash.
+
+Fingerprinted asset URLs only help if the browser fetches the HTML carrying them. A page's ETag is usually built from the code revision plus some model cache keys — editing a stylesheet moves neither. The response still validates, your caching layer returns a `304 Not Modified`, and the stored HTML keeps pointing at the previous `?s=` hash. Assiette had the new fingerprint the whole time; nobody asked for it.
+
+`include_assiette_etags!` asks for it:
+
+```ruby
+class ApplicationController < ActionController::Base
+  include_assiette_etags!
+end
+```
+
+That is the whole setup — no arguments, no entry points to name. It registers a Rails `etag` block, so it applies to every response where you call `fresh_when` or `stale?`. The macro is installed on `ActionController::Base` by the Railtie, and it resolves the handler off the Rack env, so it works in both mode 1 and mode 2, and picks the right handler when an engine mounts a second one.
+
+The value it contributes is `AssetHandler#digest`: one hash covering **every** asset that handler can serve, including images you link straight from ERB. Change any of them — content, name, or the file list itself — and the digest moves, so every page that could link an Assiette URL stops validating.
+
+### How the apex digest is computed
+
+The obvious implementation of "one hash covering everything" is a sweep: glob every mapped file, read it, hash it, hash the hashes. That works, and it is wasteful in a way that shows up on every single request — a recursive `Dir[]` across all your asset roots plus a read and a SHA-256 per file, all to re-derive numbers the dependency graph is already holding.
+
+So Assiette uses the graph instead.
+
+#### Fingerprints already cascade upward
+
+Recall how a fingerprint is built: a file with no dependencies gets the SHA-256 of its raw bytes, and a file with dependencies gets the SHA-256 of its *rewritten* content — the content with every import and `url()` carrying the fingerprint of the file it points at. Those referenced fingerprints were computed the same way, one level down. So a node's fingerprint is not a hash of that one file; it is a hash of that file's entire dependency subtree.
+
+That property is the whole trick. If a node's fingerprint already covers everything below it, you don't need to hash everything below it again.
+
+#### Apexes
+
+An **apex** is a node nothing else points at — no JS file imports it, no CSS file `url()`s it. In graph terms, its `dependents` set is empty. Take the fixtures in this repo:
+
+```
+application.css   test_with_url.css   logo.png   js/root_a.js   js/root_b.js
+                                                      │
+                                    ┌─────────────────┼─────────────────┐
+                              js/mid/alpha       js/mid/beta      js/mid/gamma
+                                    │                 │                 │
+                              leaf/alpha_*       leaf/beta_*      leaf/gamma_*
+```
+
+The top row is the apex set. Each `leaf/*_*` is a pair of files, so that is fourteen files in total — and hashing those five fingerprints covers all fourteen, with each file contributing exactly once. Everything below the top row is reachable from something in it, and its content is already baked into that ancestor's fingerprint.
+
+Note what falls out for free: `logo.png` and `application.css` are linked only from ERB. Assiette never parses your templates and has no idea they are referenced — but it doesn't need to. Nothing in the asset graph points at them, so they are apexes by construction and get hashed directly. This is why the digest catches images that a hand-rolled "ETag on my two entry points" approach misses.
+
+#### The cycle that has no apex
+
+There is one shape this misses. If `a.js` imports `b.js` and `b.js` imports `a.js`, and nothing else imports either, then both nodes have a non-empty `dependents` set — they point at each other — so neither qualifies as an apex. And since no apex reaches them, they are not covered from above either. The pair would drop out of the digest silently, which is the worst kind of cache bug: everything looks fine until someone edits a file in the cycle and the page never revalidates.
+
+The fix does not require tracking strongly connected components (the resolver builds that information transiently and throws it away once resolution finishes). Instead, `apex_paths` collects the apexes, walks down `deps` from each one marking everything it reaches, and then adopts any node in the graph that was never reached:
+
+```ruby
+(apexes + (@assets.keys - reached.to_a)).sort
+```
+
+An unreferenced cycle is by definition a set of nodes no apex can reach, so it gets adopted wholesale. This costs one traversal of a graph that is already in memory.
+
+#### Names are part of the hash
+
+The digest folds in each apex's URL path alongside its fingerprint, separated by NULs:
+
+```ruby
+combined << url_path << "\0" << tree_sha(url_path).to_s << "\0"
+```
+
+Fingerprints alone would miss a pure rename. Move `logo.png` to `brand.png` without touching a byte and every fingerprint in the graph stays identical — but the HTML changes, because the `src` changes. Hashing the path catches that, and it catches additions and deletions by the same mechanism.
+
+#### Populating the graph first
+
+There is a trap here. The graph is lazy by design, so the apex set means nothing until it is fully populated — you get a different answer depending on what the process happens to have served so far. Measured on the fixtures in this repo:
+
+| Graph state | Nodes | Apexes |
+| --- | --- | --- |
+| Cold handler | 0 | 0 |
+| After serving `js/root_a.js` | 10 | 1 |
+| Fully populated | 14 | 5 |
+
+Two Puma workers that had served different pages would compute different ETags for byte-identical content, and the resulting cache thrash would look random. So `digest` calls `ensure_graph_populated!` first, which walks every mapped file once and forces it into the graph.
+
+That walk is the expensive part, and it is amortised behind a directory-mtime guard rather than repeated per call. Directory mtimes move when an entry is added, removed or renamed — exactly the events that change the file list. Editing a file in place does *not* move them, and does not need to: the graph checks per-file mtimes on every access, so an edit anywhere in a subtree is picked up when the digest reads its apex's fingerprint. Checking the guard is one `stat` per walked directory — around 0.012ms across the five directories in this repo's fixtures.
+
+The re-walk also prunes nodes whose files have disappeared. A deleted file that something still imports is dropped as a side effect of resolving its dependents, but a deleted orphan is never revisited and would otherwise linger in the graph as a phantom apex, holding the digest still across a deletion.
+
+#### What it costs
+
+Measured on the fixtures in this repo (14 files), warm:
+
+| | per call |
+| --- | --- |
+| Apex digest | 0.145ms |
+| Full sweep over every mapped file | 1.333ms |
+
+On a real 24-file app the same comparison came out at 0.27ms against 1.73ms.
+
+The difference is not asymptotic — both walk every node. It is I/O. The sweep globs, reads and SHA-256s every file on every call. The apex digest globs only when a directory mtime moved, and otherwise does an in-memory traversal plus one `File.mtime` per node, re-reading and re-hashing only the files that actually changed. On a request where nothing changed, which is nearly all of them, it touches no file contents at all.
+
+#### Two caveats
+
+- A brand-new subdirectory is noticed through its parent's mtime only if that parent was itself walked, i.e. if it directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not be picked up until something else moves. In practice `app/assets` and its populated subdirectories are walked, so this is rare — but if you hit it, touch any walked directory.
+- On a cold handler two threads can populate the graph concurrently. This is harmless: the graph holds its own mutex, so the work is duplicated but never corrupted, and both threads arrive at the same digest.
+
 ## How Assiette works under the hood
 
 The approach is described in [this article](https://blog.julik.nl/2026/05/just-say-no-to-asset-pipelines) in detail — Assiette is simply the article packaged up as a gem. Here is the gist.

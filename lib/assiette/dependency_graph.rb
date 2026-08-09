@@ -85,6 +85,37 @@ module Assiette
       end
     end
 
+    # URL paths of the graph's apexes — assets nothing else imports or
+    # references. Every apex's digest already folds in its entire dependency
+    # subtree, so hashing the apexes hashes the whole graph with each file
+    # counted exactly once.
+    #
+    # A cycle that nothing points into has no member with empty dependents, so
+    # it would silently drop out. Rather than keeping SCC bookkeeping around
+    # (it is discarded once resolution finishes), walk down from the apexes and
+    # adopt whatever was never reached.
+    def apex_paths
+      @mutex.synchronize do
+        apexes = @assets.each_value.select { |asset| asset.dependents.empty? }.map(&:url_path)
+        reached = Set.new
+        queue = apexes.dup
+        while (url_path = queue.shift)
+          next unless reached.add?(url_path)
+          queue.concat(@assets[url_path]&.deps || [])
+        end
+        (apexes + (@assets.keys - reached.to_a)).sort
+      end
+    end
+
+    # Drops nodes whose files have disappeared from disk. Assets that something
+    # still imports get pruned as a side effect of resolving their dependents,
+    # but an orphan that nobody points at is never revisited and would linger.
+    def prune_deleted!
+      @mutex.synchronize do
+        @assets.each_value.select(&:deleted?).each { |asset| remove_asset!(asset.url_path) }
+      end
+    end
+
     # Forces a full rebuild on next access.
     def invalidate!
       @mutex.synchronize do

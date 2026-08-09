@@ -13,5 +13,11 @@ module Assiette
         include Assiette::RailsAssetUrlHelper
       end
     end
+
+    initializer "assiette.controller_etag" do
+      ActiveSupport.on_load(:action_controller_base) do
+        extend Assiette::ControllerEtag
+      end
+    end
   end
 end

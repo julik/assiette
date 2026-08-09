@@ -96,4 +96,137 @@ class AssetHandlerTest < ActiveSupport::TestCase
         "js_modules integrity must update when a file changes"
     end
   end
+
+  # --- apex digest ---
+
+  test "digest returns a 16-char hex hash" do
+    assert_match(/\A[0-9a-f]{16}\z/, @handler.digest)
+  end
+
+  test "digest is stable across repeated calls" do
+    assert_equal @handler.digest, @handler.digest
+  end
+
+  test "interior assets are absent from apex_paths but still move the digest" do
+    with_tmpdir_handler do |handler, _dir|
+      before = handler.digest
+      apexes = handler.dependency_graph.apex_paths
+
+      assert_includes apexes, "js/root_a.js"
+      assert_not_includes apexes, "js/mid/alpha.js"
+      assert_not_includes apexes, "js/leaf/alpha_one.js"
+
+      edit_in_place handler.resolve_file("js/leaf/alpha_one.js")
+
+      assert_not_equal before, handler.digest,
+        "editing an interior asset must move the apex digest"
+    end
+  end
+
+  test "a cold handler and one that has already served an asset agree" do
+    warm = build_handler
+    warm.absolute_asset_url_path("/js/root_a.js")
+
+    assert_equal ["js/root_a.js"], warm.dependency_graph.apex_paths,
+      "lazily populated graph should only know about what was asked for"
+
+    assert_equal build_handler.digest, warm.digest
+  end
+
+  test "a cycle nothing points into still contributes to the digest" do
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "entry.js"), "export const x = 1\n")
+      File.write(File.join(dir, "cycle_a.js"), <<~JS)
+        import {b} from "./cycle_b.js"
+        export function a() { return "a" + b() }
+      JS
+      File.write(File.join(dir, "cycle_b.js"), <<~JS)
+        import {a} from "./cycle_a.js"
+        export function b() { return "b" + a() }
+      JS
+      handler = Assiette::AssetHandler.new(root: dir)
+
+      before = handler.digest
+      apexes = handler.dependency_graph.apex_paths
+      assert_includes apexes, "cycle_a.js", "an unreferenced cycle must be adopted"
+      assert_includes apexes, "cycle_b.js"
+
+      edit_in_place File.join(dir, "cycle_a.js")
+
+      assert_not_equal before, handler.digest
+    end
+  end
+
+  test "adding a file moves the digest" do
+    with_tmpdir_handler do |handler, dir|
+      before = handler.digest
+      File.write(File.join(dir, "js", "root_c.js"), "export const c = 1\n")
+
+      assert_not_equal before, handler.digest
+    end
+  end
+
+  test "removing a file moves the digest" do
+    with_tmpdir_handler do |handler, dir|
+      before = handler.digest
+      File.unlink(File.join(dir, "js", "root_b.js"))
+
+      after = handler.digest
+      assert_not_equal before, after
+      assert_equal after, handler.digest, "digest must settle after a deletion"
+      assert_not_includes handler.dependency_graph.apex_paths, "js/root_b.js"
+    end
+  end
+
+  test "renaming a file moves the digest even though no content changed" do
+    with_tmpdir_handler do |handler, dir|
+      before = handler.digest
+      File.rename(File.join(dir, "js", "root_b.js"), File.join(dir, "js", "root_c.js"))
+
+      assert_not_equal before, handler.digest,
+        "the url_path is part of the digest, so a pure rename must move it"
+    end
+  end
+
+  test "digest picks up an in-place edit without re-walking the directories" do
+    with_tmpdir_handler do |handler, _dir|
+      walks = 0
+      handler.define_singleton_method(:each_mapped_file) do |&block|
+        walks += 1
+        super(&block)
+      end
+
+      before = handler.digest
+      assert_equal 1, walks
+
+      edit_in_place handler.resolve_file("js/leaf/alpha_one.js")
+
+      assert_not_equal before, handler.digest
+      assert_equal 1, walks,
+        "an in-place edit leaves directory mtimes alone and must not re-walk"
+    end
+  end
+
+  private
+
+  def build_handler
+    Assiette::AssetHandler.new(
+      root: File.expand_path("../../dummy/app/assets", __FILE__),
+      additional_directory_mappings: {"/" => File.expand_path("../../dummy/public", __FILE__)}
+    )
+  end
+
+  # Creates a tmpdir with a copy of the JS fixtures for mutation-safe tests.
+  def with_tmpdir_handler
+    Dir.mktmpdir do |dir|
+      FileUtils.cp_r(File.expand_path("../../dummy/app/assets/js", __FILE__), File.join(dir, "js"))
+      yield Assiette::AssetHandler.new(root: dir), dir
+    end
+  end
+
+  # Appends to a file without disturbing the mtime of the directory holding it.
+  def edit_in_place(abs)
+    File.write(abs, File.read(abs) + "\n// edited")
+    FileUtils.touch(abs, mtime: Time.now + 1)
+  end
 end
