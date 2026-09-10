@@ -97,6 +97,54 @@ class AssetHandlerTest < ActiveSupport::TestCase
     end
   end
 
+  # --- per-file cache busting ---
+  #
+  # Assiette used to hand every asset one process-wide version tag. In
+  # development that tag was a wall-clock timestamp computed once and memoised
+  # for the life of the process, so editing a file changed nothing until a
+  # restart; and when the tag did move, it moved every asset's URL at once.
+  # These four tests pin the fingerprint down from both sides: it must follow
+  # the bytes, and nothing but the bytes.
+
+  test "absolute_asset_url_path moves after an in-place edit" do
+    with_tmpdir_handler do |handler, _dir|
+      before = handler.absolute_asset_url_path("/js/leaf/alpha_one.js")
+      edit_in_place handler.resolve_file("js/leaf/alpha_one.js")
+
+      assert_not_equal before, handler.absolute_asset_url_path("/js/leaf/alpha_one.js"),
+        "editing a file must move its URL on the very next call, with no restart"
+    end
+  end
+
+  test "absolute_asset_url_path is stable when nothing changes" do
+    with_tmpdir_handler do |handler, _dir|
+      before = handler.absolute_asset_url_path("/js/leaf/alpha_one.js")
+
+      assert_equal before, handler.absolute_asset_url_path("/js/leaf/alpha_one.js"),
+        "the tag is a digest of content, not a timestamp: an unedited file keeps its URL"
+    end
+  end
+
+  test "editing one file leaves its siblings' URLs alone" do
+    with_tmpdir_handler do |handler, _dir|
+      before = handler.absolute_asset_url_path("/js/leaf/beta_one.js")
+      edit_in_place handler.resolve_file("js/leaf/alpha_one.js")
+
+      assert_equal before, handler.absolute_asset_url_path("/js/leaf/beta_one.js"),
+        "a per-file digest busts only what changed; one global tag would bust this too"
+    end
+  end
+
+  test "absolute_asset_url_path moves when a dependency changes" do
+    with_tmpdir_handler do |handler, _dir|
+      before = handler.absolute_asset_url_path("/js/root_a.js")
+      edit_in_place handler.resolve_file("js/leaf/alpha_one.js")
+
+      assert_not_equal before, handler.absolute_asset_url_path("/js/root_a.js"),
+        "a fingerprint covers the whole dependency subtree, not just the file's own bytes"
+    end
+  end
+
   # --- apex digest ---
 
   test "digest returns a 16-char hex hash" do
