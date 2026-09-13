@@ -78,6 +78,28 @@ Rails.application.config.middleware.use Assiette::Server,
 
 With this setup a file at `vendor/assets/datepicker.js` is served at `/vendor/datepicker.js`, while files in `app/assets` are served from the root (`/application.css`). You can combine multiple mappings in a single middleware instance.
 
+### Serving additional file types
+
+Out of the box a handler serves `.js`, `.mjs`, `.css`, `.svg`, `.png`, `.jpg`, `.jpeg` and `.ico`. Anything else gets a 404 and falls through to the rest of your Rack stack. Give a handler `content_types:` to teach that handler — and only that handler — about more:
+
+```ruby
+handler = Assiette::AssetHandler.new(
+  root: Rails.root.join("app/assets"),
+  content_types: {
+    ".woff2" => "font/woff2",
+    ".webp" => "image/webp"
+  }
+)
+
+Rails.application.config.middleware.use Assiette::Server, handler
+```
+
+The mapping is merged over the defaults, so it can also override one of them for this handler alone. Nothing is registered globally: a second handler elsewhere in the same process keeps refusing `.woff2`, which is what you want when your mounts serve directories with different rules.
+
+Extensions are normalized — the leading dot is optional and case is ignored, so `"woff2"`, `".woff2"` and `".WOFF2"` all register the same thing. Files on disk are matched case-insensitively too, so `PHOTO.JPG` is served as `image/jpeg` like any other JPEG.
+
+Registered extensions are served *and* walked: the file shows up in the handler's dependency graph, gets a `?s=` fingerprint, and moves the [apex digest](#cache-busting-the-html-that-links-your-assets) when it changes. `handler.content_types` returns the effective mapping and `handler.content_type_for("/photos/beach.JPG")` returns the content type this handler would serve a path as, or `nil` if it would not serve it at all.
+
 ## Usage inside a Rails engine (gem)
 
 Engines use `middleware.use` on the engine class, which scopes the middleware to requests that hit the engine's mount point. The `SCRIPT_NAME` is set automatically so view helpers resolve paths correctly.

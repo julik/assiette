@@ -30,8 +30,7 @@ module Assiette
       path_info = Rack::Utils.unescape_path(env["PATH_INFO"])
       path_info = path_info.sub(%r{\A/}, "")
 
-      extension = File.extname(path_info)
-      content_type = AssetHandler::CONTENT_TYPES[extension]
+      content_type = @handler.content_type_for(path_info)
       return unless content_type
 
       file_path = @handler.resolve_file(path_info)

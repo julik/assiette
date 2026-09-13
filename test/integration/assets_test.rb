@@ -37,6 +37,12 @@ class AssetsTest < ActionDispatch::IntegrationTest
     assert_equal "image/png", response.media_type
   end
 
+  test "serves JPEG files from public/ root" do
+    get "/photo.jpg"
+    assert_response :success
+    assert_equal "image/jpeg", response.media_type
+  end
+
   test "returns 404 for non-existent files" do
     get "/nonexistent.js"
     assert_response :not_found

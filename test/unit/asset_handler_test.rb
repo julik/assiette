@@ -255,13 +255,103 @@ class AssetHandlerTest < ActiveSupport::TestCase
     end
   end
 
+  # --- content types ---
+  #
+  # The set of servable extensions used to be one frozen constant, which meant
+  # an app with, say, per-tenant photo directories could not serve a JPEG at
+  # all without teaching every handler in the process about it.
+
+  test "JPEGs are served out of the box" do
+    assert_equal "image/jpeg", @handler.content_type_for("/photos/beach.jpg")
+    assert_equal "image/jpeg", @handler.content_type_for("/photos/beach.jpeg")
+  end
+
+  test "content_type_for returns nil for an extension the handler does not serve" do
+    assert_nil @handler.content_type_for("/fonts/inter.woff2")
+    assert_nil @handler.content_type_for("/LICENSE")
+  end
+
+  test "content_types registers an extension on one handler only" do
+    handler = build_handler(content_types: {".woff2" => "font/woff2"})
+    assert_equal "font/woff2", handler.content_type_for("/fonts/inter.woff2")
+
+    assert_nil build_handler.content_type_for("/fonts/inter.woff2"),
+      "registering an extension on one handler must not teach it to any other"
+    assert_not_includes Assiette::AssetHandler::CONTENT_TYPES.keys, ".woff2",
+      "the defaults are shared by every handler and must stay untouched"
+  end
+
+  test "content_types can override a default mapping for one handler" do
+    handler = build_handler(content_types: {".svg" => "text/plain"})
+    assert_equal "text/plain", handler.content_type_for("/images/icon.svg")
+
+    assert_equal "image/svg+xml", build_handler.content_type_for("/images/icon.svg")
+    assert_equal "image/svg+xml", Assiette::AssetHandler::CONTENT_TYPES[".svg"]
+  end
+
+  test "registered extensions normalize the leading dot and the case" do
+    handler = build_handler(content_types: {"woff2" => "font/woff2", ".AVIF" => "image/avif"})
+    assert_equal "font/woff2", handler.content_type_for("/fonts/inter.woff2")
+    assert_equal "image/avif", handler.content_type_for("/photos/beach.avif")
+    assert_equal({".woff2" => "font/woff2", ".avif" => "image/avif"},
+      handler.content_types.slice(".woff2", ".avif"))
+  end
+
+  test "an uppercase extension on disk is served like a lowercase one" do
+    assert_equal "image/jpeg", @handler.content_type_for("/photos/PHOTO.JPG")
+  end
+
+  test "each_mapped_file yields files with an extra registered extension" do
+    with_files_handler({"fonts/inter.woff2" => "not really a font"}, content_types: {".woff2" => "font/woff2"}) do |handler|
+      assert_includes mapped_url_paths(handler), "fonts/inter.woff2",
+        "a file the handler serves must also show up in its dependency graph"
+    end
+  end
+
+  test "each_mapped_file skips an extension the handler was not given" do
+    with_files_handler({"fonts/inter.woff2" => "not really a font", "app.css" => "body {}\n"}) do |handler|
+      assert_not_includes mapped_url_paths(handler), "fonts/inter.woff2"
+      assert_includes mapped_url_paths(handler), "app.css"
+    end
+  end
+
+  test "each_mapped_file finds a file with an uppercase extension" do
+    with_files_handler({"PHOTO.JPG" => "pretend this is a JPEG"}) do |handler|
+      assert_includes mapped_url_paths(handler), "PHOTO.JPG"
+    end
+  end
+
+  test "js_modules includes an extension registered as JavaScript" do
+    files = {"widget.jsx" => "import {x} from \"./dep.js\"\n", "dep.js" => "export const x = 1\n"}
+    with_files_handler(files, content_types: {".jsx" => "application/javascript"}) do |handler|
+      assert_includes handler.js_modules.map { |m| m[:path] }, "/widget.jsx"
+    end
+  end
+
   private
 
-  def build_handler
+  def build_handler(content_types: {})
     Assiette::AssetHandler.new(
       root: File.expand_path("../../dummy/app/assets", __FILE__),
-      additional_directory_mappings: {"/" => File.expand_path("../../dummy/public", __FILE__)}
+      additional_directory_mappings: {"/" => File.expand_path("../../dummy/public", __FILE__)},
+      content_types: content_types
     )
+  end
+
+  # Builds a handler over a throwaway directory holding the given files.
+  def with_files_handler(files, content_types: {})
+    Dir.mktmpdir do |dir|
+      files.each do |relative, contents|
+        abs = File.join(dir, relative)
+        FileUtils.mkdir_p(File.dirname(abs))
+        File.write(abs, contents)
+      end
+      yield Assiette::AssetHandler.new(root: dir, content_types: content_types)
+    end
+  end
+
+  def mapped_url_paths(handler)
+    [].tap { |paths| handler.each_mapped_file { |url_path, _abs| paths << url_path } }
   end
 
   # Creates a tmpdir with a copy of the JS fixtures for mutation-safe tests.
