@@ -24,7 +24,7 @@ Assiette does not support sourcemaps because... all the rewriting it does is at 
 
 Assiette is a Rack middleware that serves static assets directly from disk, adding some light pre-processing and globbing on top. The middleware can be installed into a Rails app, or into an Rails engine which lives inside a host application, or used standalone as a Rack middleware. Assiette takes care to record the `SCRIPT_NAME` of the request, which allows multiple instances of Assiette to be mounted and permits Assiette to be used inside nested Rack apps which, themselves, set `SCRIPT_NAME` - like Sinatra.
 
-For a deeper dive into the internals — the request lifecycle, the dependency graph, and how the apex digest is computed — see [ARCHITECTURE.md](ARCHITECTURE.md).
+For a deeper dive into the internals — the request lifecycle, the handler stack, and how the dependency graph works — see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Installation
 
@@ -291,17 +291,15 @@ end
 
 That is the whole setup — no arguments, no entry points to name. It registers a Rails `etag` block, so it applies to every response where you call `fresh_when` or `stale?`. The macro is installed on `ActionController::Base` by the Railtie, and it resolves the handler off the Rack env, so it works in both mode 1 and mode 2, and picks the right handler when an engine mounts a second one.
 
-The value it contributes is `AssetHandler#digest`: one hash covering **every** asset that handler can serve, including images you link straight from ERB. Change any of them — content, name, or the file list itself — and the digest moves, so every page that could link an Assiette URL stops validating. With several `Assiette::Server`s mounted it folds in one digest per handler on the stack, because the view helpers will resolve an asset against any of them. It is cheap enough to call on every request — it reads the dependency graph rather than sweeping your asset directories, and does no file I/O at all when nothing has changed. [ARCHITECTURE.md](ARCHITECTURE.md#the-apex-digest) has the details.
+The value it contributes is `AssetHandler#digest`: one hash covering **every** asset that handler can serve, including images you link straight from ERB. Change any of them — content, name, or the file list itself — and the digest moves, so every page that could link an Assiette URL stops validating. With several `Assiette::Server`s mounted it folds in one digest per handler on the stack, because the view helpers will resolve an asset against any of them. It is cheap enough to call on every request — it reads the dependency graph rather than sweeping your asset directories, and does no file I/O at all when nothing has changed. [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md#the-apex-digest) has the details.
 
-It is deliberately coarse: it covers what the handler *can* serve, not what this page happens to link, so editing any asset invalidates every page. That is the only answer available before the template runs — `etag` blocks are evaluated inside `fresh_when`, in the action, and not rendering is the entire point of a conditional GET. If a page knows its own entry points, it can scope its validator to them with `AssetHandler#digest_for`:
+That is coarse on purpose: editing any asset invalidates every page. If a page knows which assets it links, scope its validator to them with `AssetHandler#digest_for` instead:
 
 ```ruby
 fresh_when(@post, etag: Rails.application.assets.digest_for(["/application.css", "/js/app.js"]))
 ```
 
-Name only the tops: a fingerprint already folds in everything the file imports, so one entry module covers its whole import tree. Naming nothing else is the point — `digest_for` hashes exactly what it is given, with no glob, no apex set and no populated graph behind it. What it cannot cover is `assiette_modulepreload_tags`, which renders a listing of whatever the handler holds and so depends on which files exist rather than on any fixed set of paths. Pages using it want `digest`.
-
-Adding, removing or renaming a file anywhere under your asset roots moves it, including in a directory that held no servable files before — the mtime guard watches every directory under the roots, not only the ones with assets in them.
+Name only your entry points — a fingerprint already covers everything the file imports, so one module stands in for its whole import tree. Do not use it on a page rendering `assiette_modulepreload_tags`: those tags list whatever the handler holds, so the page depends on which files exist and wants `digest`.
 
 ## License
 
