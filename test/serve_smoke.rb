@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "rackup"
+require "rackup/handler/webrick"
 
 server = TCPServer.new("127.0.0.1", 0)
 port = server.addr[1]

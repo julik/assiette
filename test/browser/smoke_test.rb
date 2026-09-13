@@ -2,7 +2,7 @@
 
 require "test_helper"
 require "ferrum"
-require "rackup"
+require "rackup/handler/webrick"
 
 class BrowserSmokeTest < ActionDispatch::IntegrationTest
   setup do
