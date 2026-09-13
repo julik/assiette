@@ -78,6 +78,23 @@ Rails.application.config.middleware.use Assiette::Server,
 
 With this setup a file at `vendor/assets/datepicker.js` is served at `/vendor/datepicker.js`, while files in `app/assets` are served from the root (`/application.css`). You can combine multiple mappings in a single middleware instance.
 
+### Varying the served directories per request
+
+A single `Assiette::Server` is normally built around one `AssetHandler` for the life of the process. If the set of directories you want to serve depends on the request — a multi-tenant app where every tenant has its own asset directory, say — pass something callable instead of a handler. It is called once per request with the Rack `env` and returns the handler to use, or `nil`:
+
+```ruby
+Rails.application.config.middleware.use Assiette::Server, ->(env) {
+  tenant = Tenant.find_by(host: env["HTTP_HOST"])
+  tenant && Assiette::AssetHandler.new(root: tenant.assets_root)
+}
+```
+
+Returning `nil` means "nothing to serve for this request": the request passes straight through to the rest of the stack, and the view helpers do not see this middleware at all.
+
+Build the handlers up front and cache them per tenant rather than allocating one on every request — a handler holds the dependency graph, and a fresh one starts cold, so building one per request throws the fingerprint cache away each time.
+
+Because handlers are per-request, this composes with mounting several `Assiette::Server`s: give a tenant its own directory through a callable and keep a second, plain `Assiette::Server` for the assets everyone shares. The view helpers search every handler on the stack (see below), so a page can link assets from either.
+
 ### Serving additional file types
 
 Out of the box a handler serves `.js`, `.mjs`, `.css`, `.svg`, `.png`, `.jpg`, `.jpeg` and `.ico`. Anything else gets a 404 and falls through to the rest of your Rack stack. Give a handler `content_types:` to teach that handler — and only that handler — about more:
@@ -160,11 +177,13 @@ end
 
 ### `assiette_asset_path(path)`
 
-Returns the URL path with a `?s=` cache-busting content hash appended.
+Returns the URL path with a `?s=` cache-busting content hash appended. Returns `nil` if no handler has the file.
 
 ### `assiette_asset_integrity(path)`
 
 Returns the `sha256-...` SRI hash for the served content (after import rewriting). Returns `nil` if the file is not found.
+
+Both search every `Assiette::Server` that ran for this request, innermost first, and use the first handler that actually has the file. With one Server mounted there is nothing to search; with several, the innermost one does not necessarily hold the asset a page is asking for.
 
 ### `assiette_stylesheet_tag(path)`
 
@@ -173,6 +192,8 @@ Renders a `<link rel="stylesheet">` tag with `integrity` and `crossorigin` attri
 ### `assiette_modulepreload_tags`
 
 Scans the asset roots for `.js`/`.mjs` files containing ES `import`/`export` statements and renders `<link rel="modulepreload">` tags for each, with SRI integrity hashes.
+
+Unlike the two helpers above this one does *not* search the stack — it stays scoped to the innermost `Assiette::Server`. It renders a listing of everything a handler holds, and with per-tenant handlers walking the stack would put one tenant's file list on another tenant's page. Mount the Server holding the modules you want preloaded innermost.
 
 ## Rails asset pipeline integration
 
