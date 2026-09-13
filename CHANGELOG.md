@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 - **Fix:** a fingerprint could lag the bytes it stands for. When a node's dependency was recomputed, the node's own dependents were not told — they compare their deps' digests from before and after their own visit, so a dep already updated during an earlier visit read as unchanged. Deleting `js/leaf/alpha_one.js` left `js/root_a.js` serving an import rewritten to the new `?s=` under its old fingerprint, so no browser holding the old copy ever refetched it. Recomputing a node now propagates to its dependents, as rescanning a stale one already did.
 - **Fix:** the digest's directory-mtime guard watched only directories that held a servable file, so a new asset under a directory that held none was invisible — `app/assets/js/new_thing/a.js` where `app/assets/js` has no files of its own did not move `AssetHandler#digest`, and every page kept validating. It now watches every directory under the mapped roots. That costs around 1.6µs per extra directory per call: not measurable on ordinary trees, and 0.88ms to 1.5ms on a deliberately directory-heavy one (401 directories, 100 files).
