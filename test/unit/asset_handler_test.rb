@@ -171,6 +171,47 @@ class AssetHandlerTest < ActiveSupport::TestCase
     end
   end
 
+  test "a new asset under a directory that held none moves the digest" do
+    Dir.mktmpdir do |dir|
+      # js/ holds no servable file of its own — only js/mid/ does. Watching
+      # just the directories that hold files would leave js/ unwatched, and a
+      # whole new subtree under it invisible.
+      FileUtils.mkdir_p(File.join(dir, "js/mid"))
+      File.write(File.join(dir, "js/mid/alpha.js"), "export const alpha = 1\n")
+      handler = Assiette::AssetHandler.new(root: dir)
+      before = handler.digest
+
+      FileUtils.mkdir_p(File.join(dir, "js/new_thing"))
+      File.write(File.join(dir, "js/new_thing/a.js"), "export const a = 2\n")
+
+      assert_not_equal before, handler.digest,
+        "every page linking Assiette URLs would keep validating while this file went unseen"
+    end
+  end
+
+  test "a root that did not exist yet is picked up once it does" do
+    Dir.mktmpdir do |dir|
+      root = File.join(dir, "assets")
+      handler = Assiette::AssetHandler.new(root: root)
+      before = handler.digest
+
+      FileUtils.mkdir_p(root)
+      File.write(File.join(root, "late.css"), "body{color:red}\n")
+
+      assert_not_equal before, handler.digest,
+        "an empty watch list must not read as \"nothing has changed\" forever"
+    end
+  end
+
+  test "a deleted directory is noticed" do
+    with_tmpdir_handler do |handler, dir|
+      before = handler.digest
+      FileUtils.rm_rf(File.join(dir, "js/leaf"))
+
+      assert_not_equal before, handler.digest
+    end
+  end
+
   test "a cold handler and one that has already served an asset agree" do
     warm = build_handler
     warm.absolute_asset_url_path("/js/root_a.js")

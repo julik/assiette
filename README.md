@@ -24,7 +24,7 @@ Assiette does not support sourcemaps because... all the rewriting it does is at 
 
 Assiette is a Rack middleware that serves static assets directly from disk, adding some light pre-processing and globbing on top. The middleware can be installed into a Rails app, or into an Rails engine which lives inside a host application, or used standalone as a Rack middleware. Assiette takes care to record the `SCRIPT_NAME` of the request, which allows multiple instances of Assiette to be mounted and permits Assiette to be used inside nested Rack apps which, themselves, set `SCRIPT_NAME` - like Sinatra.
 
-For a deeper dive into the internals — the request lifecycle, the dependency graph, and how the apex digest is computed — see [ARCHITECTURE.md](ARCHITECTURE.md).
+For a deeper dive into the internals — the request lifecycle, the handler stack, and how the dependency graph works — see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Installation
 
@@ -291,9 +291,15 @@ end
 
 That is the whole setup — no arguments, no entry points to name. It registers a Rails `etag` block, so it applies to every response where you call `fresh_when` or `stale?`. The macro is installed on `ActionController::Base` by the Railtie, and it resolves the handler off the Rack env, so it works in both mode 1 and mode 2, and picks the right handler when an engine mounts a second one.
 
-The value it contributes is `AssetHandler#digest`: one hash covering **every** asset that handler can serve, including images you link straight from ERB. Change any of them — content, name, or the file list itself — and the digest moves, so every page that could link an Assiette URL stops validating. It is cheap enough to call on every request — it reads the dependency graph rather than sweeping your asset directories, and does no file I/O at all when nothing has changed. [ARCHITECTURE.md](ARCHITECTURE.md#the-apex-digest) has the details.
+The value it contributes is `AssetHandler#digest`: one hash covering **every** asset that handler can serve, including images you link straight from ERB. Change any of them — content, name, or the file list itself — and the digest moves, so every page that could link an Assiette URL stops validating. With several `Assiette::Server`s mounted it folds in one digest per handler on the stack, because the view helpers will resolve an asset against any of them. It is cheap enough to call on every request — it reads the dependency graph rather than sweeping your asset directories, and does no file I/O at all when nothing has changed. [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md#the-apex-digest) has the details.
 
-One gotcha worth knowing: a brand-new *directory* is noticed through its parent's mtime, and only if that parent itself directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not move the digest until something else does. Touching any directory that does hold servable files fixes it.
+That is coarse on purpose: editing any asset invalidates every page. If a page knows which assets it links, scope its validator to them with `AssetHandler#digest_for` instead:
+
+```ruby
+fresh_when(@post, etag: Rails.application.assets.digest_for(["/application.css", "/js/app.js"]))
+```
+
+Name only your entry points — a fingerprint already covers everything the file imports, so one module stands in for its whole import tree. Do not use it on a page rendering `assiette_modulepreload_tags`: those tags list whatever the handler holds, so the page depends on which files exist and wants `digest`.
 
 ## License
 

@@ -168,6 +168,13 @@ module Assiette
 
         if old_dep_digests != new_dep_digests
           compute_digest_for(url_path)
+          # And tell whoever imports this one, exactly as rescan_asset! does.
+          # Without it a node recomputed here keeps stale dependents: they
+          # compare their deps' digests from before and after their own visit,
+          # and a dep already updated during an earlier visit looks unchanged.
+          # Their rewritten content carries the new ?s= while their own
+          # fingerprint still says otherwise, so nobody refetches them.
+          propagate_to_dependents!(existing)
         end
 
         return existing

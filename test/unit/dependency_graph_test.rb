@@ -348,6 +348,52 @@ class DependencyGraphTest < ActiveSupport::TestCase
     end
   end
 
+  # --- a fingerprint must never lag the bytes it stands for ---
+  #
+  # A node whose dependency changed is recomputed. Its own dependents were not
+  # told, and they compare their deps' digests from before and after their own
+  # visit — so a dep already updated during an earlier visit reads as unchanged.
+  # The dependent then serves content carrying the new ?s= under its old
+  # fingerprint, and nothing ever refetches it.
+
+  test "a grandparent's fingerprint moves when a leaf it imports is deleted" do
+    with_js_tree_handler do |handler, graph|
+      raw = File.binread(handler.resolve_file("js/root_a.js"))
+      before_sha = graph.tree_sha("js/root_a.js")
+      before_body = graph.rewrite_content("js/root_a.js", raw)
+
+      FileUtils.rm_rf(File.join(handler.resolve_file("js/root_a.js").dirname, "leaf"))
+      handler.digest # the walk that used to leave root_a behind
+
+      assert_not_equal before_body, graph.rewrite_content("js/root_a.js", raw),
+        "the served bytes changed: the import now carries a different ?s="
+      assert_not_equal before_sha, graph.tree_sha("js/root_a.js"),
+        "so the fingerprint standing for those bytes has to have changed too"
+    end
+  end
+
+  test "a grandparent's fingerprint moves when a leaf it imports is edited" do
+    with_js_tree_handler do |handler, graph|
+      before = graph.tree_sha("js/root_a.js")
+
+      leaf = handler.resolve_file("js/leaf/alpha_one.js")
+      File.write(leaf, File.read(leaf) + "\n// edited")
+      FileUtils.touch(leaf, mtime: Time.now + 1)
+      graph.tree_sha("js/mid/alpha.js") # visit the parent first, as a walk would
+
+      assert_not_equal before, graph.tree_sha("js/root_a.js")
+    end
+  end
+
+  # A copy of the fixture module tree, safe to edit and delete from.
+  def with_js_tree_handler
+    Dir.mktmpdir do |dir|
+      FileUtils.cp_r(File.expand_path("../../dummy/app/assets/js", __FILE__), File.join(dir, "js"))
+      handler = Assiette::AssetHandler.new(root: dir)
+      yield handler, handler.dependency_graph
+    end
+  end
+
   # Creates a tmpdir with cyclic JS imports: cycle_a -> cycle_b -> cycle_a,
   # plus a non-cycle file that imports cycle_a.
   def with_cycle_handler
