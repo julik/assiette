@@ -162,18 +162,37 @@ Unknown paths hash as the empty string rather than being skipped, so a link that
 
 `env["assiette.referenced"]` is a `handler => Set of URL paths` hash, written by every helper as it resolves: `assiette_asset_path`, `assiette_asset_integrity`, each tag `assiette_modulepreload_tags` emits, and `compute_asset_path` for apps in mode 2, where `image_tag` and friends resolve through Assiette. It is keyed by handler because the stack can hold several, and a digest is only meaningful within the handler whose graph produced it.
 
-### The ordering problem, and the log
+### The ordering problem: predict, then settle
 
-Here is the part that does not fall out cleanly. Rails collects `etag` blocks and evaluates them in `combine_etags`, which runs inside `fresh_when` — in the action, **before the template renders**. So at the moment the page's validator is assembled, `env["assiette.referenced"]` is empty. The information the digest wants does not exist yet, and the request that most needs it (the one about to 304 without rendering) is exactly the one that will never produce it.
+Here is the part that does not fall out cleanly. Rails collects `etag` blocks and evaluates them in `combine_etags`, which runs inside `fresh_when` — in the action, **before the template renders**. So at the moment the page's validator is assembled, `env["assiette.referenced"]` is empty. The information the digest wants does not exist yet, and the request that most needs it — the one about to answer 304 without rendering — is exactly the one that will never produce it.
 
-`Assiette::ReferenceLog` closes the loop the only way available: the set from the *previous* render of the same page, kept per process on the handler. `include_assiette_etags!` reads it when building the ETag and installs an `after_action` that writes the current render's set back. The log is keyed by host, path and format, bounded at 2048 entries, and evicts the least recently recorded key.
+Skipping the render is not negotiable; that is what a conditional GET is *for*. So the digest is split into two values doing two different jobs.
 
-Four things follow, and they are the honest cost of the approach:
+**The prediction** is built before the render, from the set the previous render of the same page left in `Assiette::ReferenceLog` — a bounded, per-process log on the handler, keyed by host, path and format. It is folded into the ETag, and it is what the 304 decision is made against. With nothing remembered it predicts `digest` instead.
 
-- **A page this process has not rendered has nothing remembered**, and falls back to `digest`. That is a fallback to the coarser guarantee, never to a weaker one. A booted worker pays at most one extra full render per page, and cross-worker disagreement during warm-up costs revalidations, never staleness.
-- **The digest covers the assets the page linked, not which assets it links.** A template that starts linking something new is not covered by the remembered set. What saves this in practice is that changing a template means a deploy, and a deploy starts processes whose log is empty — which falls back to `digest`. An app that changes which assets a page links *without* deploying and *without* moving its own validator can hand out one stale HTML per page per process.
-- **Query strings are not part of the key.** Two variants of one path that link different assets share a slot and overwrite each other. The ETag then flips between two values, costing revalidations. Including the query string would key the log on something unbounded, which is worse.
-- **A 304 must not clear the set.** Nothing rendered, so nothing was linked, and recording `[]` would change the ETag away from the one that just validated — turning every second request into a miss. The `after_action` writes only when the render actually linked something.
+**The settlement** happens after the render, when the true set is finally known. `combine_etags` is overridden to keep the validator list Rails hashed, so the ETag can be reissued from the same list with the predicted digest swapped for the true one:
+
+```ruby
+settled = @assiette_etag_validators.map do |validator|
+  (validator == @assiette_predicted_digest) ? truth : validator
+end
+```
+
+That split is what makes a wrong prediction cheap. The client always stores a validator computed from what the page really links, so a worker with a cold log does not hand out a different ETag from its warm neighbours — it just renders once. And since the settled ETag still matches the `If-None-Match` the client sent, `Rack::ConditionalGet`, sitting above the app in the middleware stack, converts the response to a `304` on its way out. The render was wasted; the body still never goes over the wire.
+
+### Why a stale prediction is not a freshness bug
+
+A false 304 needs the prediction to reproduce the client's stored ETag while the page has in fact changed. The client's stored ETag was settled from the previous render's true set, so the prediction reproduces it exactly when the page's link set is unchanged. Asset *contents* changing does not hide: every remembered path is looked up fresh, so a moved fingerprint moves the digest.
+
+What is left is the link set itself changing. Three things narrow that down to almost nothing:
+
+- **Rails folds the template digest into the same ETag.** `ActionController::EtagWithTemplateDigest` is on by default and contributes `ActionView::Digestor.digest` for the action's template and its dependencies. A template cannot start linking a new asset without moving it.
+- **Listings are detected and scoped up.** `assiette_modulepreload_tags` renders *everything the handler holds*, which depends on which files exist and so cannot be described by any set of remembered paths — add a module and every remembered path is still valid, while the page has changed. The helper therefore records `Helpers::WHOLE_HANDLER` instead, and a page whose record contains it is digested with `AssetHandler#digest`. It gives up the precision, which is the honest answer for a page that depends on the whole directory.
+- **The 304 path never records.** Nothing rendered, so nothing was linked; writing an empty set would throw away the set that produced the ETag that just validated.
+
+The residual hole is a page whose links come from data rather than from its template — `image_tag(@product.photo_path)` — with a validator that does not include that data. That is the same hole `fresh_when` has for any input it was not given.
+
+An empty recorded set, by contrast, is a real and useful answer: a page that links no assets has no reason to be invalidated when an asset changes, so a JSON endpoint behind `include_assiette_etags!` stops being busted by CSS edits after its first render.
 
 ## Staying out of your way (and how to get rid of it)
 

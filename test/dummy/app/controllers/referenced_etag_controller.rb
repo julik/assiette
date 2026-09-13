@@ -13,4 +13,15 @@ class ReferencedEtagController < ActionController::Base
   def image_page
     fresh_when(etag: "fixed")
   end
+
+  # Links one entry module, which imports a tree of others.
+  def js_page
+    fresh_when(etag: "fixed")
+  end
+
+  # Renders a listing of every module the handler holds, rather than naming
+  # links — so it depends on which files exist.
+  def preload_page
+    fresh_when(etag: "fixed")
+  end
 end

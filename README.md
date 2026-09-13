@@ -293,15 +293,29 @@ That is the whole setup — no arguments, no entry points to name. It registers 
 
 The value it contributes is a digest of the assets **that page links** — the URLs its helpers emitted, each one standing in for everything it imports. Edit a stylesheet and the pages linking it stop validating; the pages that never mentioned it keep their 304s.
 
-That the referenced node can stand in for its whole subtree is the same property the `?s=` hashes rely on: a file's fingerprint is a hash of its *rewritten* content, so it already folds in the fingerprint of everything it imports, recursively. A page linking one entry module is fully covered by that one module's fingerprint, however many files hang off it.
+That a referenced node can stand in for its whole subtree is the same property the `?s=` hashes rely on: a file's fingerprint is a hash of its *rewritten* content, so it already folds in the fingerprint of everything it imports, recursively. A page linking one entry module is fully covered by that one module's fingerprint, however many files hang off it.
 
-There is an ordering problem to know about. Rails evaluates `etag` blocks inside `fresh_when`, in the action — *before* the template renders — so at the moment the validator is built, which assets this response is about to link is not knowable. So the macro uses the set the previous render of the same page left behind, in a per-process log on the handler, and installs an `after_action` to write the current render's set back. Consequences:
+#### Predict, then settle
 
-- **A page this process has not rendered yet** has nothing remembered, and falls back to the whole-handler digest. Never something weaker. After one render it switches over, so a freshly booted worker costs at most one extra full render per page.
-- **What the digest covers is the assets the page linked last time, not which assets it links.** If a template changes to link a *new* asset and the app's own validator does not move, that page can hand out one stale HTML per process before the log catches up. In practice a template change is a deploy, and a deploy starts processes with an empty log — which falls back to the whole-handler digest.
-- **The log is keyed by host, path and format**, not the query string. Two variants of the same path that link different assets take the same slot and overwrite each other, costing revalidations — never staleness.
+Answering "not modified" *without rendering* is the entire point of a conditional GET, so the ETag has to exist before the template runs — and before the template runs, which assets it links is not knowable. Rails evaluates `etag` blocks inside `fresh_when`, in the action. So two different values do two different jobs:
 
-If you would rather have the coarse guarantee, ask for it:
+- **Before the render**, the macro *predicts* the page's links from what the last render of the same page left in a per-process log on the handler, and folds that digest in. This is the value the 304 decision is made against. With nothing remembered it predicts `AssetHandler#digest` — coarser, never weaker.
+- **After the render**, the true set is known, so the macro reissues the ETag from it. That is the value the client stores.
+
+So a mispredicting worker — one that has just booted, say — costs a render, and only a render. It does not hand out a different ETag from its warm neighbours, and because the settled ETag still matches what the client sent, `Rack::ConditionalGet` turns the response into a `304` on the way out: the body does not go over the wire either.
+
+#### What this covers, and what it does not
+
+For a stale prediction to cost *freshness* rather than a render, a page would have to change **which** assets it links while everything else in its validator stood still. Two things stand in the way of that:
+
+- Rails already folds the template digest into the ETag (`ActionController::EtagWithTemplateDigest`, on by default). Links that come from the template cannot change without moving it.
+- A page that renders a *listing* of a handler's assets rather than naming them — `assiette_modulepreload_tags` — is detected and scoped to the whole handler automatically, because "every module there is" is not describable as a set of remembered paths. Such a page folds in `AssetHandler#digest` and busts whenever any module appears, disappears or changes.
+
+What is left is a page whose link set is driven by data rather than by its template — `image_tag(@product.photo_path)` — *and* whose validator does not include that data. Put the record in the validator, as you would anyway, and it is covered.
+
+Two smaller things worth knowing: the log is keyed by host, path and format, so two variants of one path that link different assets share a slot and mispredict each other (a render apiece, nothing more); and it holds 2048 pages per process, evicting the least recently rendered.
+
+#### Asking for the coarse guarantee instead
 
 ```ruby
 class ApplicationController < ActionController::Base
@@ -309,9 +323,9 @@ class ApplicationController < ActionController::Base
 end
 ```
 
-That folds in `AssetHandler#digest`: one hash covering **every** asset the handler can serve. Change any of them — content, name, or the file list itself — and every page that could link an Assiette URL stops validating. It needs no warm-up and no remembered state, and it costs a walk of the whole graph on every request rather than of one page's links. On this repo's fixtures (14 files) that is 0.115ms against 0.053ms; on a 514-file tree, 3.3ms against 0.061ms, because only one of the two grows with the size of your asset directory.
+That folds in `AssetHandler#digest`: one hash covering **every** asset the handler can serve. Change any of them — content, name, or the file list itself — and every page that could link an Assiette URL stops validating. It needs no warm-up, no remembered state and no settling, and it costs a walk of the whole graph on every request rather than of one page's links. On this repo's fixtures (14 files) that is 0.115ms against 0.053ms; on a 514-file tree, 3.3ms against 0.061ms, because only one of the two grows with the size of your asset directory.
 
-One gotcha specific to `:all`: a brand-new *directory* is noticed through its parent's mtime, and only if that parent itself directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not move the digest until something else does. Touching any directory that does hold servable files fixes it. The default mode does not have this problem — it names the assets it hashes instead of discovering them.
+One gotcha specific to `:all`: a brand-new *directory* is noticed through its parent's mtime, and only if that parent itself directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not move the digest until something else does. Touching any directory that does hold servable files fixes it. The default mode does not have this problem for the pages that name their links — it hashes the assets it was given rather than discovering them — but a listing page falls back to `:all` and inherits it.
 
 ## License
 
