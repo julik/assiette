@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `Assiette::Server` accepts a callable in place of a handler. It is called once per request with the Rack env and returns the `AssetHandler` to use, so an application can vary the served directories per request — a multi-tenant app can hand every tenant its own asset root through one middleware entry. Returning `nil` passes the request through without recording anything on `env["assiette.stack"]`. Passing a plain handler works exactly as before.
+- `assiette_asset_path` and `assiette_asset_integrity` now search the whole handler stack, innermost first, instead of only the last entry. With two `Assiette::Server`s mounted the innermost used to win unconditionally, so an asset belonging to an outer handler resolved to `nil`. They return `nil` when no handler in the stack has the file, and still raise when no Server ran at all.
+- `assiette_modulepreload_tags` stays scoped to the innermost handler on purpose — it lists every module a handler holds, and walking the stack would put one tenant's file list on another tenant's page.
+
 ## 0.5.0
 
 - Add `AssetHandler#digest` — an "apex digest": one hash covering every asset the handler can serve. Fold it into a page's ETag and the page stops validating as soon as any Assiette URL on it would come out different. Computed from the dependency graph's apexes rather than by sweeping every mapped file, and amortised behind a directory-mtime guard.

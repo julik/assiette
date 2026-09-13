@@ -20,6 +20,18 @@ For JS and CSS files, Assiette does one extra thing before serving: it scans the
 
 The response goes out with `Cache-Control: public, max-age=432000, must-revalidate` and the ETag. If the request doesn't match any known asset extension, the middleware passes it straight through to the next app in the Rack stack — Assiette never interferes with your controllers or API routes.
 
+## The handler stack
+
+Which files a `Server` can serve is decided by its `AssetHandler`. Usually there is one, built when the middleware is constructed. It can also be resolved per request: pass something callable instead of a handler and it is called once, at the top of `#call`, with the Rack env. That is what lets a multi-tenant application serve a different directory per tenant through one middleware entry. Returning `nil` from it means "not mine": the request passes through untouched, and — importantly — nothing is recorded for it.
+
+What gets recorded is `env["assiette.stack"]`. Every `Server` that runs appends `{handler:, script_name:}` to it, so by the time a controller renders, the array holds one entry per Server that saw the request, outermost first. The `SCRIPT_NAME` is captured at that moment rather than at render time, which is what makes an engine mounted at `/admin` produce `/admin/app.css` while the host app's own Server produces `/app.css`.
+
+The view helpers read that array. `assiette_asset_path` and `assiette_asset_integrity` walk it from the innermost entry outwards and use the first handler whose `resolve_file` actually finds the file. Taking only the last entry — which is what they used to do — works fine until a second Server is mounted, at which point the innermost one silently wins and an asset belonging to an outer handler resolves to `nil`. Walking costs one `resolve_file` per entry, which is a `stat` on a path the handler has already mapped, and stops at the first hit.
+
+`assiette_modulepreload_tags` deliberately does not walk. It renders a listing of *everything* a handler holds, so searching outwards would mean emitting one tenant's file list on another tenant's page. It stays scoped to the innermost entry; mount the Server whose modules you want preloaded innermost.
+
+`include_assiette_etags!` likewise reads only the last entry — it wants one digest to fold into the validator, and the innermost handler is the one whose assets that page is most likely linking.
+
 ## The dependency graph
 
 The import rewriting is backed by a lazy dependency graph. It is not built at startup. The first time a file is requested, Assiette resolves its URL path to an absolute file path, reads it, extracts the imports, and then recursively does the same for each dependency. Digests are computed bottom-up: leaf files (with no imports of their own) get a straightforward SHA-256 of their raw content, and files with dependencies get a SHA-256 of their rewritten content, which already includes the hashes of everything they import. This means each file's fingerprint reflects the content of its entire dependency subtree.
