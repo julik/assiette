@@ -109,7 +109,7 @@ There is a trap here. The graph is lazy by design, so the apex set means nothing
 
 Two Puma workers that had served different pages would compute different ETags for byte-identical content, and the resulting cache thrash would look random. So `digest` calls `ensure_graph_populated!` first, which walks every mapped file once and forces it into the graph.
 
-That walk is the expensive part, and it is amortised behind a directory-mtime guard rather than repeated per call. Directory mtimes move when an entry is added, removed or renamed — exactly the events that change the file list. Editing a file in place does *not* move them, and does not need to: the graph checks per-file mtimes on every access, so an edit anywhere in a subtree is picked up when the digest reads its apex's fingerprint. Checking the guard is one `stat` per walked directory — around 0.012ms across the five directories in this repo's fixtures.
+That walk is the expensive part, and it is amortised behind a directory-mtime guard rather than repeated per call. Directory mtimes move when an entry is added, removed or renamed — exactly the events that change the file list. Editing a file in place does *not* move them, and does not need to: the graph checks per-file mtimes on every access, so an edit anywhere in a subtree is picked up when the digest reads its apex's fingerprint. Checking the guard is one `stat` per directory under the mapped roots — **every** directory, not only the ones holding a servable file. Watching just the file-bearing ones leaves a hole exactly where it does the most damage: adding `app/assets/js/new_thing/a.js` moves the mtime of `app/assets/js`, but if that directory holds no servable file of its own it was never watched, and the new asset stays invisible. Every page keeps validating while its HTML has no idea the file exists. The extra directories cost around 1.6µs each per call — on the fixtures here it is not measurable; on a deliberately directory-heavy tree (401 directories, 100 files) it takes the digest from 0.88ms to 1.5ms. Correctness is worth that.
 
 The re-walk also prunes nodes whose files have disappeared. A deleted file that something still imports is dropped as a side effect of resolving its dependents, but a deleted orphan is never revisited and would otherwise linger in the graph as a phantom apex, holding the digest still across a deletion.
 
@@ -126,9 +126,8 @@ On a real 24-file app the same comparison came out at 0.27ms against 1.73ms.
 
 The difference is not asymptotic — both walk every node. It is I/O. The sweep globs, reads and SHA-256s every file on every call. The apex digest globs only when a directory mtime moved, and otherwise does an in-memory traversal plus one `File.mtime` per node, re-reading and re-hashing only the files that actually changed. On a request where nothing changed, which is nearly all of them, it touches no file contents at all.
 
-### Two caveats
+### One caveat
 
-- A brand-new subdirectory is noticed through its parent's mtime only if that parent was itself walked, i.e. if it directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not be picked up until something else moves. In practice `app/assets` and its populated subdirectories are walked, so this is rare — but if you hit it, touch any walked directory.
 - On a cold handler two threads can populate the graph concurrently. This is harmless: the graph holds its own mutex, so the work is duplicated but never corrupted, and both threads arrive at the same digest.
 
 ### Scoping it down

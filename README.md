@@ -301,7 +301,7 @@ fresh_when(@post, etag: Rails.application.assets.digest_for(["/application.css",
 
 Name only the tops: a fingerprint already folds in everything the file imports, so one entry module covers its whole import tree. Naming nothing else is the point — `digest_for` hashes exactly what it is given, with no glob, no apex set and no populated graph behind it. What it cannot cover is `assiette_modulepreload_tags`, which renders a listing of whatever the handler holds and so depends on which files exist rather than on any fixed set of paths. Pages using it want `digest`.
 
-One gotcha worth knowing: a brand-new *directory* is noticed through its parent's mtime, and only if that parent itself directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not move the digest until something else does. Touching any directory that does hold servable files fixes it.
+Adding, removing or renaming a file anywhere under your asset roots moves it, including in a directory that held no servable files before — the mtime guard watches every directory under the roots, not only the ones with assets in them.
 
 ## License
 

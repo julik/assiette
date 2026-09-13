@@ -184,22 +184,44 @@ module Assiette
     # place does not move them, and does not need to: the graph checks per-file
     # mtimes on every access.
     def ensure_graph_populated!
-      return if walked_directories_unchanged?
-      walked = {}
-      each_mapped_file do |url_path, abs_path|
-        @dependency_graph[url_path]
-        dir = File.dirname(abs_path)
-        walked[dir] ||= File.mtime(dir)
-      end
+      return if watched_directories_unchanged?
+      each_mapped_file { |url_path, _abs_path| @dependency_graph[url_path] }
       @dependency_graph.prune_deleted!
-      @walked_directories = walked
+      @watched_directories = directory_mtimes
     end
 
-    def walked_directories_unchanged?
-      return false unless @walked_directories
-      @walked_directories.all? { |dir, mtime| File.mtime(dir) == mtime }
+    def watched_directories_unchanged?
+      return false unless @watched_directories
+      @watched_directories.all? { |dir, mtime| File.mtime(dir) == mtime }
     rescue Errno::ENOENT
       false
+    end
+
+    # Every directory under every mapped root, with its mtime.
+    #
+    # Watching only the directories that held a servable file leaves a hole
+    # right where it hurts. Adding app/assets/js/new_thing/a.js moves the mtime
+    # of app/assets/js — but if that directory holds no servable file of its
+    # own it was never watched, and the new asset stays invisible to the
+    # digest: every page keeps validating while linking HTML that has no idea
+    # the file exists. Watching the intermediate directories too costs one more
+    # `stat` apiece per call and closes it.
+    #
+    # nil rather than an empty Hash when there is nothing to watch, because an
+    # empty Hash reads as "nothing changed" forever — a root that does not
+    # exist yet would never be picked up once it did.
+    def directory_mtimes
+      mtimes = {}
+      @mappings.each do |_prefix, root|
+        next unless root.directory?
+        [root.to_s, *Dir.glob(File.join(root, "**/"))].each do |dir|
+          path = dir.chomp("/")
+          mtimes[path] ||= File.mtime(path)
+        end
+      end
+      mtimes.empty? ? nil : mtimes
+    rescue Errno::ENOENT
+      nil # something vanished mid-walk; re-walk on the next call
     end
 
     def build_mappings(root, additional_directory_mappings)
