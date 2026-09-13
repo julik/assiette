@@ -14,7 +14,7 @@ Assiette takes a different position: you should be able to drop a `.js` or `.css
 
 ## What happens when a request comes in
 
-Assiette is a Rack middleware. When it sees a GET request for a path that maps to a file with a known extension (`.js`, `.mjs`, `.css`, `.svg`, `.png`, `.ico`), it resolves the file through its dependency graph, which gives it a content hash. That hash becomes the ETag. If the browser sends back a matching `If-None-Match` header, Assiette returns a `304 Not Modified` without even reading the file from disk, and that's the end of it.
+Assiette is a Rack middleware. When it sees a GET request for a path that maps to a file with a known extension (`.js`, `.mjs`, `.css`, `.svg`, `.png`, `.jpg`, `.jpeg`, `.ico`, plus whatever the handler was given through `content_types:`), it resolves the file through its dependency graph, which gives it a content hash. That hash becomes the ETag. If the browser sends back a matching `If-None-Match` header, Assiette returns a `304 Not Modified` without even reading the file from disk, and that's the end of it.
 
 For JS and CSS files, Assiette does one extra thing before serving: it scans the file for relative `import` statements (in JS) and `url()` references (in CSS) and appends a `?s=<content-hash>` query parameter to each one. The hash comes from the content of the file being referenced — after that file's own imports have been rewritten too — so the fingerprints cascade through the entire import tree. The scanning is done with lightweight regexes, not a full parser, and it only looks at paths that are clearly relative or absolute filesystem references. Protocol URLs, data URIs, and anything that looks like a remote resource is left alone.
 
