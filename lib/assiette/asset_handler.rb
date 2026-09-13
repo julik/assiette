@@ -55,7 +55,7 @@ module Assiette
     def each_mapped_file
       @mappings.each do |prefix, root|
         @content_types.each_key do |ext|
-          Dir.glob(File.join(root, "**/*#{ext}"), File::FNM_CASEFOLD).each do |abs|
+          Dir.glob(File.join(root, "**/*#{case_insensitive(ext)}")).each do |abs|
             relative = Pathname.new(abs).relative_path_from(root).to_s
             url_path = if prefix.empty?
               relative
@@ -102,9 +102,9 @@ module Assiette
     end
 
     def js_modules
-      js_glob = "**/*{#{javascript_extensions.join(",")}}"
+      js_glob = "**/*{#{javascript_extensions.map { |ext| case_insensitive(ext) }.join(",")}}"
       @mappings.flat_map { |prefix, root|
-        Dir.glob(File.join(root, js_glob), File::FNM_CASEFOLD).filter_map { |abs|
+        Dir.glob(File.join(root, js_glob)).filter_map { |abs|
           next unless File.foreach(abs).any? { |line| line.match?(/\A\s*(import|export)\s/) }
           relative = Pathname.new(abs).relative_path_from(root).to_s
           mod_path = "/#{"#{prefix}/" unless prefix.empty?}#{relative}".squeeze("/")
@@ -134,6 +134,13 @@ module Assiette
     # handler had registered with a JavaScript content type.
     def javascript_extensions
       @content_types.select { |_ext, content_type| content_type == JS_CONTENT_TYPE }.keys
+    end
+
+    # Dir.glob ignores File::FNM_CASEFOLD - "Case sensitivity depends on your
+    # system" - so on Linux a "*.jpg" pattern walks straight past PHOTO.JPG.
+    # Fold the case into the pattern itself instead: ".jpg" => ".[jJ][pP][gG]".
+    def case_insensitive(extension)
+      extension.gsub(/[a-z]/) { |char| "[#{char}#{char.upcase}]" }
     end
 
     # ".JPG", "jpg" and ".jpg" all name the same extension.
