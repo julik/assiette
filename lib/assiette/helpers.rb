@@ -7,6 +7,7 @@ module Assiette
     def assiette_asset_path(path)
       entry = assiette_entry_resolving(path)
       return unless entry
+      assiette_record_reference(entry[:handler], path)
       entry[:handler].absolute_asset_url_path(path, entry[:script_name])
     end
 
@@ -15,6 +16,7 @@ module Assiette
     def assiette_asset_integrity(path)
       entry = assiette_entry_resolving(path)
       return unless entry
+      assiette_record_reference(entry[:handler], path)
       entry[:handler].asset_integrity(path)
     end
 
@@ -36,10 +38,22 @@ module Assiette
       entry = assiette_stack.last
       handler = entry[:handler]
       safe_join(handler.js_modules.map { |mod|
+        assiette_record_reference(handler, mod[:path])
         tag.link(rel: "modulepreload",
           href: handler.absolute_asset_url_path(mod[:path], entry[:script_name]),
           integrity: mod[:integrity], crossorigin: "anonymous")
       }, "\n")
+    end
+
+    # Every asset this response has linked so far, as handler => Set of URL
+    # paths. Written by the helpers as they resolve, read after the render by
+    # `include_assiette_etags!` to remember what this page links.
+    def self.referenced(env)
+      env["assiette.referenced"] ||= {}
+    end
+
+    def self.record_reference(env, handler, path)
+      (referenced(env)[handler] ||= Set.new) << path.sub(%r{\A/}, "")
     end
 
     private
@@ -57,6 +71,10 @@ module Assiette
     # holding the asset a page asks for. Returns nil if none of them has it.
     def assiette_entry_resolving(path)
       assiette_stack.reverse_each.find { |entry| entry[:handler].resolve_file(path) }
+    end
+
+    def assiette_record_reference(handler, path)
+      Helpers.record_reference(request.env, handler, path)
     end
   end
 end

@@ -46,7 +46,7 @@ Because ES modules are discovered by the browser as JavaScript arrives and gets 
 
 ## The apex digest
 
-`AssetHandler#digest` is one hash covering every asset a handler can serve. It exists so that a page linking Assiette URLs stops validating as soon as any of those URLs would come out different — see [Cache busting the HTML that links your assets](README.md#cache-busting-the-html-that-links-your-assets) in the README for what it is for and how to switch it on. This section is about how it is computed.
+`AssetHandler#digest` is one hash covering every asset a handler can serve. It exists so that a page linking Assiette URLs stops validating as soon as any of those URLs would come out different — see [Cache busting the HTML that links your assets](README.md#cache-busting-the-html-that-links-your-assets) in the README for what it is for and how to switch it on. It is what `include_assiette_etags!(digest: :all)` folds in, and what the default mode falls back to for a page this process has not rendered yet — see [The referenced digest](#the-referenced-digest) below. This section is about how it is computed.
 
 The obvious implementation of "one hash covering everything" is a sweep: glob every mapped file, read it, hash it, hash the hashes. That works, and it is wasteful in a way that shows up on every single request — a recursive `Dir[]` across all your asset roots plus a read and a SHA-256 per file, all to re-derive numbers the dependency graph is already holding.
 
@@ -130,6 +130,50 @@ The difference is not asymptotic — both walk every node. It is I/O. The sweep 
 
 - A brand-new subdirectory is noticed through its parent's mtime only if that parent was itself walked, i.e. if it directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not be picked up until something else moves. In practice `app/assets` and its populated subdirectories are walked, so this is rare — but if you hit it, touch any walked directory.
 - On a cold handler two threads can populate the graph concurrently. This is harmless: the graph holds its own mutex, so the work is duplicated but never corrupted, and both threads arrive at the same digest.
+
+## The referenced digest
+
+The apex digest answers "did *anything* change?". What a page actually needs to know is narrower: "did anything **I link** change?". `AssetHandler#digest_for(url_paths)` answers that one, and it is what `include_assiette_etags!` folds in by default.
+
+```ruby
+def digest_for(url_paths)
+  combined = Digest::SHA256.new
+  url_paths.map { |path| path.sub(%r{\A/}, "") }.uniq.sort.each do |url_path|
+    combined << url_path << "\0" << @dependency_graph.tree_sha(url_path).to_s << "\0"
+  end
+  combined.hexdigest[0, 16]
+end
+```
+
+That is the same body as `digest`, over a set the caller names instead of the apex set. Which makes it sound like a small variation, and in cost terms it is not:
+
+| | 14 files | 514 files |
+| --- | --- | --- |
+| Apex digest | 0.115ms | 3.280ms |
+| Referenced digest (2-3 links) | 0.053ms | 0.061ms |
+
+The apex digest grows with the asset directory; the referenced digest grows with the page. Nothing has to be *discovered*, so `ensure_graph_populated!` is not called and no directory is globbed — the input is a list of names, and the work is one `File.mtime` per named node and per node underneath it that the graph already holds.
+
+The reason a handful of names can stand in for the whole tree is the property the apex digest already leans on, applied one level down. A node's fingerprint is the SHA-256 of its *rewritten* content, and rewritten content carries the fingerprint of everything the file imports — so naming `js/root_a.js` covers the three mid files and six leaves below it. A page that links one entry module and one stylesheet is fully described by two names.
+
+Unknown paths hash as the empty string rather than being skipped, so a link that stops resolving — deleted, renamed away — still moves the digest. And the path goes into the hash next to the fingerprint, for the same reason it does in the apex digest: a pure rename changes the HTML without changing a single fingerprint.
+
+### Recording what a page links
+
+`env["assiette.referenced"]` is a `handler => Set of URL paths` hash, written by every helper as it resolves: `assiette_asset_path`, `assiette_asset_integrity`, each tag `assiette_modulepreload_tags` emits, and `compute_asset_path` for apps in mode 2, where `image_tag` and friends resolve through Assiette. It is keyed by handler because the stack can hold several, and a digest is only meaningful within the handler whose graph produced it.
+
+### The ordering problem, and the log
+
+Here is the part that does not fall out cleanly. Rails collects `etag` blocks and evaluates them in `combine_etags`, which runs inside `fresh_when` — in the action, **before the template renders**. So at the moment the page's validator is assembled, `env["assiette.referenced"]` is empty. The information the digest wants does not exist yet, and the request that most needs it (the one about to 304 without rendering) is exactly the one that will never produce it.
+
+`Assiette::ReferenceLog` closes the loop the only way available: the set from the *previous* render of the same page, kept per process on the handler. `include_assiette_etags!` reads it when building the ETag and installs an `after_action` that writes the current render's set back. The log is keyed by host, path and format, bounded at 2048 entries, and evicts the least recently recorded key.
+
+Four things follow, and they are the honest cost of the approach:
+
+- **A page this process has not rendered has nothing remembered**, and falls back to `digest`. That is a fallback to the coarser guarantee, never to a weaker one. A booted worker pays at most one extra full render per page, and cross-worker disagreement during warm-up costs revalidations, never staleness.
+- **The digest covers the assets the page linked, not which assets it links.** A template that starts linking something new is not covered by the remembered set. What saves this in practice is that changing a template means a deploy, and a deploy starts processes whose log is empty — which falls back to `digest`. An app that changes which assets a page links *without* deploying and *without* moving its own validator can hand out one stale HTML per page per process.
+- **Query strings are not part of the key.** Two variants of one path that link different assets share a slot and overwrite each other. The ETag then flips between two values, costing revalidations. Including the query string would key the log on something unbounded, which is worse.
+- **A 304 must not clear the set.** Nothing rendered, so nothing was linked, and recording `[]` would change the ETag away from the one that just validated — turning every second request into a miss. The `after_action` writes only when the render actually linked something.
 
 ## Staying out of your way (and how to get rid of it)
 

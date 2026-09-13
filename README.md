@@ -24,7 +24,7 @@ Assiette does not support sourcemaps because... all the rewriting it does is at 
 
 Assiette is a Rack middleware that serves static assets directly from disk, adding some light pre-processing and globbing on top. The middleware can be installed into a Rails app, or into an Rails engine which lives inside a host application, or used standalone as a Rack middleware. Assiette takes care to record the `SCRIPT_NAME` of the request, which allows multiple instances of Assiette to be mounted and permits Assiette to be used inside nested Rack apps which, themselves, set `SCRIPT_NAME` - like Sinatra.
 
-For a deeper dive into the internals — the request lifecycle, the dependency graph, and how the apex digest is computed — see [ARCHITECTURE.md](ARCHITECTURE.md).
+For a deeper dive into the internals — the request lifecycle, the dependency graph, and how the HTML digests are computed — see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Installation
 
@@ -115,7 +115,7 @@ The mapping is merged over the defaults, so it can also override one of them for
 
 Extensions are normalized — the leading dot is optional and case is ignored, so `"woff2"`, `".woff2"` and `".WOFF2"` all register the same thing. Files on disk are matched case-insensitively too, so `PHOTO.JPG` is served as `image/jpeg` like any other JPEG.
 
-Registered extensions are served *and* walked: the file shows up in the handler's dependency graph, gets a `?s=` fingerprint, and moves the [apex digest](#cache-busting-the-html-that-links-your-assets) when it changes. `handler.content_types` returns the effective mapping and `handler.content_type_for("/photos/beach.JPG")` returns the content type this handler would serve a path as, or `nil` if it would not serve it at all.
+Registered extensions are served *and* walked: the file shows up in the handler's dependency graph, gets a `?s=` fingerprint, and moves the [ETag of the pages linking it](#cache-busting-the-html-that-links-your-assets) when it changes. `handler.content_types` returns the effective mapping and `handler.content_type_for("/photos/beach.JPG")` returns the content type this handler would serve a path as, or `nil` if it would not serve it at all.
 
 ## Usage inside a Rails engine (gem)
 
@@ -291,9 +291,27 @@ end
 
 That is the whole setup — no arguments, no entry points to name. It registers a Rails `etag` block, so it applies to every response where you call `fresh_when` or `stale?`. The macro is installed on `ActionController::Base` by the Railtie, and it resolves the handler off the Rack env, so it works in both mode 1 and mode 2, and picks the right handler when an engine mounts a second one.
 
-The value it contributes is `AssetHandler#digest`: one hash covering **every** asset that handler can serve, including images you link straight from ERB. Change any of them — content, name, or the file list itself — and the digest moves, so every page that could link an Assiette URL stops validating. It is cheap enough to call on every request — it reads the dependency graph rather than sweeping your asset directories, and does no file I/O at all when nothing has changed. [ARCHITECTURE.md](ARCHITECTURE.md#the-apex-digest) has the details.
+The value it contributes is a digest of the assets **that page links** — the URLs its helpers emitted, each one standing in for everything it imports. Edit a stylesheet and the pages linking it stop validating; the pages that never mentioned it keep their 304s.
 
-One gotcha worth knowing: a brand-new *directory* is noticed through its parent's mtime, and only if that parent itself directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not move the digest until something else does. Touching any directory that does hold servable files fixes it.
+That the referenced node can stand in for its whole subtree is the same property the `?s=` hashes rely on: a file's fingerprint is a hash of its *rewritten* content, so it already folds in the fingerprint of everything it imports, recursively. A page linking one entry module is fully covered by that one module's fingerprint, however many files hang off it.
+
+There is an ordering problem to know about. Rails evaluates `etag` blocks inside `fresh_when`, in the action — *before* the template renders — so at the moment the validator is built, which assets this response is about to link is not knowable. So the macro uses the set the previous render of the same page left behind, in a per-process log on the handler, and installs an `after_action` to write the current render's set back. Consequences:
+
+- **A page this process has not rendered yet** has nothing remembered, and falls back to the whole-handler digest. Never something weaker. After one render it switches over, so a freshly booted worker costs at most one extra full render per page.
+- **What the digest covers is the assets the page linked last time, not which assets it links.** If a template changes to link a *new* asset and the app's own validator does not move, that page can hand out one stale HTML per process before the log catches up. In practice a template change is a deploy, and a deploy starts processes with an empty log — which falls back to the whole-handler digest.
+- **The log is keyed by host, path and format**, not the query string. Two variants of the same path that link different assets take the same slot and overwrite each other, costing revalidations — never staleness.
+
+If you would rather have the coarse guarantee, ask for it:
+
+```ruby
+class ApplicationController < ActionController::Base
+  include_assiette_etags!(digest: :all)
+end
+```
+
+That folds in `AssetHandler#digest`: one hash covering **every** asset the handler can serve. Change any of them — content, name, or the file list itself — and every page that could link an Assiette URL stops validating. It needs no warm-up and no remembered state, and it costs a walk of the whole graph on every request rather than of one page's links. On this repo's fixtures (14 files) that is 0.115ms against 0.053ms; on a 514-file tree, 3.3ms against 0.061ms, because only one of the two grows with the size of your asset directory.
+
+One gotcha specific to `:all`: a brand-new *directory* is noticed through its parent's mtime, and only if that parent itself directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not move the digest until something else does. Touching any directory that does hold servable files fixes it. The default mode does not have this problem — it names the assets it hashes instead of discovering them.
 
 ## License
 

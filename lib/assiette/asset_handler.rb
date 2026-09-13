@@ -24,6 +24,9 @@ module Assiette
 
     attr_reader :dependency_graph
 
+    # What each page this handler served last linked. See ReferenceLog.
+    attr_reader :reference_log
+
     # Every extension this handler serves, as ".ext" => content type. This is
     # CONTENT_TYPES with the `content_types:` argument merged over it.
     attr_reader :content_types
@@ -43,6 +46,7 @@ module Assiette
       @content_types = CONTENT_TYPES.merge(content_types.to_h { |ext, type| [normalize_extension(ext), type] }).freeze
       @mappings = build_mappings(root, additional_directory_mappings)
       @dependency_graph = DependencyGraph.new(self)
+      @reference_log = ReferenceLog.new
     end
 
     # The content type this handler serves `path` as, or nil if its extension
@@ -123,6 +127,26 @@ module Assiette
       ensure_graph_populated!
       combined = Digest::SHA256.new
       @dependency_graph.apex_paths.each do |url_path|
+        combined << url_path << "\0" << @dependency_graph.tree_sha(url_path).to_s << "\0"
+      end
+      combined.hexdigest[0, 16]
+    end
+
+    # A hash covering exactly the assets named in `url_paths` — one page's
+    # links rather than everything the handler holds.
+    #
+    # Naming the nodes is what makes this cheap: each one's fingerprint already
+    # folds in its whole import subtree, so a page that links one entry module
+    # is covered by that module's fingerprint alone, however many files hang off
+    # it. There is no graph to populate first, because nothing has to be
+    # discovered — no glob, no apex set, just one `File.mtime` per named node
+    # and per node below it that the graph already holds.
+    #
+    # An unknown path hashes as the empty string, so a page keeps busting when
+    # an asset it links is deleted or renamed away.
+    def digest_for(url_paths)
+      combined = Digest::SHA256.new
+      url_paths.map { |path| path.sub(%r{\A/}, "") }.uniq.sort.each do |url_path|
         combined << url_path << "\0" << @dependency_graph.tree_sha(url_path).to_s << "\0"
       end
       combined.hexdigest[0, 16]
