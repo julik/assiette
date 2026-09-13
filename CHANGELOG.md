@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Serve `.jpg` and `.jpeg` as `image/jpeg` by default. Asset directories holding photographs could not be served at all before.
+- Add the `content_types:` argument to `AssetHandler.new`, merged over `CONTENT_TYPES` for that handler alone, so one mount can serve extra extensions without a process-wide allowlist that every other handler inherits. Extensions are normalized: the leading dot is optional, case is ignored, and files on disk are matched case-insensitively (`PHOTO.JPG` included).
+- Add `AssetHandler#content_types` (the effective mapping) and `AssetHandler#content_type_for(path)` (nil for an extension the handler does not serve). `Server` resolves content types through the handler instead of reading `AssetHandler::CONTENT_TYPES` directly, and `#each_mapped_file` / `#js_modules` glob the handler's effective extensions, so a registered extension lands in the dependency graph rather than being served outside of it.
+
 ## 0.5.0
 
 - Add `AssetHandler#digest` — an "apex digest": one hash covering every asset the handler can serve. Fold it into a page's ETag and the page stops validating as soon as any Assiette URL on it would come out different. Computed from the dependency graph's apexes rather than by sweeping every mapped file, and amortised behind a directory-mtime guard.
