@@ -13,14 +13,7 @@ module Assiette
       resolver = Rails.application.assets
       if resolver.is_a?(Assiette::AssetHandler)
         resolved = resolver.absolute_asset_url_path("/#{source}")
-        if resolved
-          # image_tag and friends go through here, so this is where a page
-          # rendering in mode 2 declares what it links. No request means no
-          # response to fold the reference into — a mailer, say.
-          env = (request&.env if respond_to?(:request))
-          Assiette::Helpers.record_reference(env, resolver, source) if env
-          return resolved
-        end
+        return resolved if resolved
       end
       super
     end

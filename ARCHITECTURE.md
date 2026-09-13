@@ -30,7 +30,7 @@ The view helpers read that array. `assiette_asset_path` and `assiette_asset_inte
 
 `assiette_modulepreload_tags` deliberately does not walk. It renders a listing of *everything* a handler holds, so searching outwards would mean emitting one tenant's file list on another tenant's page. It stays scoped to the innermost entry; mount the Server whose modules you want preloaded innermost.
 
-`include_assiette_etags!` likewise reads only the last entry — it wants one digest to fold into the validator, and the innermost handler is the one whose assets that page is most likely linking.
+`include_assiette_etags!` reads the whole array too, and for the same reason: it folds in one apex digest per entry. Taking only the last would leave a page validating after an asset it links from an outer handler changed — which the helpers will happily have given it a URL for.
 
 ## The dependency graph
 
@@ -46,7 +46,7 @@ Because ES modules are discovered by the browser as JavaScript arrives and gets 
 
 ## The apex digest
 
-`AssetHandler#digest` is one hash covering every asset a handler can serve. It exists so that a page linking Assiette URLs stops validating as soon as any of those URLs would come out different — see [Cache busting the HTML that links your assets](README.md#cache-busting-the-html-that-links-your-assets) in the README for what it is for and how to switch it on. It is what `include_assiette_etags!(digest: :all)` folds in, and what the default mode falls back to for a page this process has not rendered yet — see [The referenced digest](#the-referenced-digest) below. This section is about how it is computed.
+`AssetHandler#digest` is one hash covering every asset a handler can serve. It exists so that a page linking Assiette URLs stops validating as soon as any of those URLs would come out different — see [Cache busting the HTML that links your assets](README.md#cache-busting-the-html-that-links-your-assets) in the README for what it is for and how to switch it on. This section is about how it is computed.
 
 The obvious implementation of "one hash covering everything" is a sweep: glob every mapped file, read it, hash it, hash the hashes. That works, and it is wasteful in a way that shows up on every single request — a recursive `Dir[]` across all your asset roots plus a read and a SHA-256 per file, all to re-derive numbers the dependency graph is already holding.
 
@@ -131,9 +131,9 @@ The difference is not asymptotic — both walk every node. It is I/O. The sweep 
 - A brand-new subdirectory is noticed through its parent's mtime only if that parent was itself walked, i.e. if it directly contained at least one servable file. Adding `app/assets/js/new_thing/a.js` where `app/assets/js` holds no files of its own will not be picked up until something else moves. In practice `app/assets` and its populated subdirectories are walked, so this is rare — but if you hit it, touch any walked directory.
 - On a cold handler two threads can populate the graph concurrently. This is harmless: the graph holds its own mutex, so the work is duplicated but never corrupted, and both threads arrive at the same digest.
 
-## The referenced digest
+### Scoping it down
 
-The apex digest answers "did *anything* change?". What a page actually needs to know is narrower: "did anything **I link** change?". `AssetHandler#digest_for(url_paths)` answers that one, and it is what `include_assiette_etags!` folds in by default.
+The apex digest answers "did *anything* change?". A page only needs the narrower question — "did anything **I link** change?" — and `AssetHandler#digest_for(url_paths)` answers that one, over a set the caller names instead of the apex set:
 
 ```ruby
 def digest_for(url_paths)
@@ -145,54 +145,16 @@ def digest_for(url_paths)
 end
 ```
 
-That is the same body as `digest`, over a set the caller names instead of the apex set. Which makes it sound like a small variation, and in cost terms it is not:
+Same body, and in cost terms not a small variation:
 
 | | 14 files | 514 files |
 | --- | --- | --- |
 | Apex digest | 0.115ms | 3.280ms |
-| Referenced digest (2-3 links) | 0.053ms | 0.061ms |
+| `digest_for`, 2-3 names | 0.053ms | 0.061ms |
 
-The apex digest grows with the asset directory; the referenced digest grows with the page. Nothing has to be *discovered*, so `ensure_graph_populated!` is not called and no directory is globbed — the input is a list of names, and the work is one `File.mtime` per named node and per node underneath it that the graph already holds.
+The apex digest grows with the asset directory; this grows with the page. Nothing has to be *discovered*, so `ensure_graph_populated!` is not called and no directory is globbed — the input is a list of names, and the work is one `File.mtime` per named node and per node underneath it that the graph already holds. A handful of names is enough because of the property the apex digest already leans on, applied one level down: a node's fingerprint is the SHA-256 of its *rewritten* content, which carries the fingerprints of everything it imports. Naming `js/root_a.js` covers the three mid files and six leaves below it.
 
-The reason a handful of names can stand in for the whole tree is the property the apex digest already leans on, applied one level down. A node's fingerprint is the SHA-256 of its *rewritten* content, and rewritten content carries the fingerprint of everything the file imports — so naming `js/root_a.js` covers the three mid files and six leaves below it. A page that links one entry module and one stylesheet is fully described by two names.
-
-Unknown paths hash as the empty string rather than being skipped, so a link that stops resolving — deleted, renamed away — still moves the digest. And the path goes into the hash next to the fingerprint, for the same reason it does in the apex digest: a pure rename changes the HTML without changing a single fingerprint.
-
-### Recording what a page links
-
-`env["assiette.referenced"]` is a `handler => Set of URL paths` hash, written by every helper as it resolves: `assiette_asset_path`, `assiette_asset_integrity`, each tag `assiette_modulepreload_tags` emits, and `compute_asset_path` for apps in mode 2, where `image_tag` and friends resolve through Assiette. It is keyed by handler because the stack can hold several, and a digest is only meaningful within the handler whose graph produced it.
-
-### The ordering problem: predict, then settle
-
-Here is the part that does not fall out cleanly. Rails collects `etag` blocks and evaluates them in `combine_etags`, which runs inside `fresh_when` — in the action, **before the template renders**. So at the moment the page's validator is assembled, `env["assiette.referenced"]` is empty. The information the digest wants does not exist yet, and the request that most needs it — the one about to answer 304 without rendering — is exactly the one that will never produce it.
-
-Skipping the render is not negotiable; that is what a conditional GET is *for*. So the digest is split into two values doing two different jobs.
-
-**The prediction** is built before the render, from the set the previous render of the same page left in `Assiette::ReferenceLog` — a bounded, per-process log on the handler, keyed by host, path and format. It is folded into the ETag, and it is what the 304 decision is made against. With nothing remembered it predicts `digest` instead.
-
-**The settlement** happens after the render, when the true set is finally known. `combine_etags` is overridden to keep the validator list Rails hashed, so the ETag can be reissued from the same list with the predicted digest swapped for the true one:
-
-```ruby
-settled = @assiette_etag_validators.map do |validator|
-  (validator == @assiette_predicted_digest) ? truth : validator
-end
-```
-
-That split is what makes a wrong prediction cheap. The client always stores a validator computed from what the page really links, so a worker with a cold log does not hand out a different ETag from its warm neighbours — it just renders once. And since the settled ETag still matches the `If-None-Match` the client sent, `Rack::ConditionalGet`, sitting above the app in the middleware stack, converts the response to a `304` on its way out. The render was wasted; the body still never goes over the wire.
-
-### Why a stale prediction is not a freshness bug
-
-A false 304 needs the prediction to reproduce the client's stored ETag while the page has in fact changed. The client's stored ETag was settled from the previous render's true set, so the prediction reproduces it exactly when the page's link set is unchanged. Asset *contents* changing does not hide: every remembered path is looked up fresh, so a moved fingerprint moves the digest.
-
-What is left is the link set itself changing. Three things narrow that down to almost nothing:
-
-- **Rails folds the template digest into the same ETag.** `ActionController::EtagWithTemplateDigest` is on by default and contributes `ActionView::Digestor.digest` for the action's template and its dependencies. A template cannot start linking a new asset without moving it.
-- **Listings are detected and scoped up.** `assiette_modulepreload_tags` renders *everything the handler holds*, which depends on which files exist and so cannot be described by any set of remembered paths — add a module and every remembered path is still valid, while the page has changed. The helper therefore records `Helpers::WHOLE_HANDLER` instead, and a page whose record contains it is digested with `AssetHandler#digest`. It gives up the precision, which is the honest answer for a page that depends on the whole directory.
-- **The 304 path never records.** Nothing rendered, so nothing was linked; writing an empty set would throw away the set that produced the ETag that just validated.
-
-The residual hole is a page whose links come from data rather than from its template — `image_tag(@product.photo_path)` — with a validator that does not include that data. That is the same hole `fresh_when` has for any input it was not given.
-
-An empty recorded set, by contrast, is a real and useful answer: a page that links no assets has no reason to be invalidated when an asset changes, so a JSON endpoint behind `include_assiette_etags!` stops being busted by CSS edits after its first render.
+What it cannot do is decide *which* names to hash on a page's behalf. `etag` blocks are evaluated in `combine_etags`, inside `fresh_when` — in the action, before the template renders — so at the moment a validator is assembled, which assets that response is about to link is not knowable, and the request that would most like to know is exactly the one about to answer 304 without rendering. Anything learned from previous renders is a guess, and a guess that is wrong in the unsafe direction serves stale HTML. So `include_assiette_etags!` stays on the apex digest, and `digest_for` is there for a page whose entry points its author knows and can simply name.
 
 ## Staying out of your way (and how to get rid of it)
 

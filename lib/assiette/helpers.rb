@@ -2,20 +2,11 @@
 
 module Assiette
   module Helpers
-    # Recorded instead of a path when a page renders a *listing* of a handler's
-    # assets rather than naming them. A listing depends on which files exist,
-    # not only on their contents, so no fixed set of paths can describe it: add
-    # a module and the page changes while every remembered path stays put. A
-    # page that renders one is scoped to the whole handler, and its ETag folds
-    # in AssetHandler#digest.
-    WHOLE_HANDLER = "\u0000assiette:whole-handler"
-
     # Returns the URL path to an asset served by Assiette, with a cache-busting
     # version tag appended. Returns nil if no handler in the stack has the file.
     def assiette_asset_path(path)
       entry = assiette_entry_resolving(path)
       return unless entry
-      assiette_record_reference(entry[:handler], path)
       entry[:handler].absolute_asset_url_path(path, entry[:script_name])
     end
 
@@ -24,7 +15,6 @@ module Assiette
     def assiette_asset_integrity(path)
       entry = assiette_entry_resolving(path)
       return unless entry
-      assiette_record_reference(entry[:handler], path)
       entry[:handler].asset_integrity(path)
     end
 
@@ -45,37 +35,11 @@ module Assiette
     def assiette_modulepreload_tags
       entry = assiette_stack.last
       handler = entry[:handler]
-      Helpers.record_reference(request.env, handler, WHOLE_HANDLER)
       safe_join(handler.js_modules.map { |mod|
-        assiette_record_reference(handler, mod[:path])
         tag.link(rel: "modulepreload",
           href: handler.absolute_asset_url_path(mod[:path], entry[:script_name]),
           integrity: mod[:integrity], crossorigin: "anonymous")
       }, "\n")
-    end
-
-    # Every asset this response has linked so far, as handler => Set of URL
-    # paths. Written by the helpers as they resolve, read after the render by
-    # `include_assiette_etags!` to remember what this page links.
-    def self.referenced(env)
-      env["assiette.referenced"] ||= {}
-    end
-
-    # Starts the record over. The Rack env is per request in production, so
-    # this matters for a render that follows another one within a single
-    # request — and for controller tests, where the env is recycled.
-    def self.reset_references(env)
-      env["assiette.referenced"] = {}
-    end
-
-    def self.record_reference(env, handler, path)
-      (referenced(env)[handler] ||= Set.new) << path.sub(%r{\A/}, "")
-    end
-
-    # Whether a recorded set describes a listing rather than a fixed set of
-    # links — see WHOLE_HANDLER.
-    def self.whole_handler?(paths)
-      paths.include?(WHOLE_HANDLER)
     end
 
     private
@@ -93,10 +57,6 @@ module Assiette
     # holding the asset a page asks for. Returns nil if none of them has it.
     def assiette_entry_resolving(path)
       assiette_stack.reverse_each.find { |entry| entry[:handler].resolve_file(path) }
-    end
-
-    def assiette_record_reference(handler, path)
-      Helpers.record_reference(request.env, handler, path)
     end
   end
 end

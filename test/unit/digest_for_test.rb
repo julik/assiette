@@ -6,7 +6,9 @@ require "fileutils"
 
 # AssetHandler#digest_for hashes exactly the nodes it is handed, leaning on the
 # fingerprints already cascading up the graph: naming a root module covers
-# everything that module imports, without naming any of it.
+# everything that module imports, without naming any of it. It is the primitive
+# for a page that knows its own entry points and wants a validator scoped to
+# them, where #digest covers the whole handler.
 class ReferencedDigestTest < ActiveSupport::TestCase
   setup do
     @handler = Assiette::AssetHandler.new(
@@ -119,55 +121,5 @@ class ReferencedDigestTest < ActiveSupport::TestCase
   def edit_in_place(abs)
     File.write(abs, File.read(abs) + "\n// edited")
     FileUtils.touch(abs, mtime: Time.now + 1)
-  end
-end
-
-class ReferenceLogTest < ActiveSupport::TestCase
-  setup { @log = Assiette::ReferenceLog.new }
-
-  test "an unrecorded key reads as nil, not as an empty set" do
-    assert_nil @log["/page"]
-  end
-
-  test "a recorded key reads back sorted" do
-    @log.record("/page", ["b.css", "a.css"])
-
-    assert_equal ["a.css", "b.css"], @log["/page"]
-  end
-
-  test "recording an empty set is remembered as such" do
-    @log.record("/page", [])
-
-    assert_equal [], @log["/page"],
-      "a page that links nothing has been rendered — that is not the same as never seen"
-  end
-
-  test "recording twice replaces the previous set" do
-    @log.record("/page", ["a.css"])
-    @log.record("/page", ["b.css"])
-
-    assert_equal ["b.css"], @log["/page"]
-  end
-
-  test "the log is bounded and drops the least recently recorded key" do
-    log = Assiette::ReferenceLog.new(limit: 2)
-    log.record("/one", ["a.css"])
-    log.record("/two", ["b.css"])
-    log.record("/three", ["c.css"])
-
-    assert_equal 2, log.size
-    assert_nil log["/one"]
-    assert_equal ["c.css"], log["/three"]
-  end
-
-  test "re-recording a key keeps it from being evicted" do
-    log = Assiette::ReferenceLog.new(limit: 2)
-    log.record("/one", ["a.css"])
-    log.record("/two", ["b.css"])
-    log.record("/one", ["a.css"])
-    log.record("/three", ["c.css"])
-
-    assert_equal ["a.css"], log["/one"], "a page still in active use must outlive an idle one"
-    assert_nil log["/two"]
   end
 end

@@ -24,9 +24,6 @@ module Assiette
 
     attr_reader :dependency_graph
 
-    # What each page this handler served last linked. See ReferenceLog.
-    attr_reader :reference_log
-
     # Every extension this handler serves, as ".ext" => content type. This is
     # CONTENT_TYPES with the `content_types:` argument merged over it.
     attr_reader :content_types
@@ -46,7 +43,6 @@ module Assiette
       @content_types = CONTENT_TYPES.merge(content_types.to_h { |ext, type| [normalize_extension(ext), type] }).freeze
       @mappings = build_mappings(root, additional_directory_mappings)
       @dependency_graph = DependencyGraph.new(self)
-      @reference_log = ReferenceLog.new
     end
 
     # The content type this handler serves `path` as, or nil if its extension
@@ -132,18 +128,22 @@ module Assiette
       combined.hexdigest[0, 16]
     end
 
-    # A hash covering exactly the assets named in `url_paths` — one page's
-    # links rather than everything the handler holds.
+    # A hash covering exactly the assets named in `url_paths`, for a page that
+    # knows its own entry points and wants a validator scoped to them:
     #
-    # Naming the nodes is what makes this cheap: each one's fingerprint already
-    # folds in its whole import subtree, so a page that links one entry module
-    # is covered by that module's fingerprint alone, however many files hang off
-    # it. There is no graph to populate first, because nothing has to be
-    # discovered — no glob, no apex set, just one `File.mtime` per named node
-    # and per node below it that the graph already holds.
+    #   fresh_when(@post, etag: handler.digest_for(["/application.css", "/js/app.js"]))
+    #
+    # Naming the nodes is what makes this cheap, and short. Each one's
+    # fingerprint already folds in its whole import subtree, so one entry module
+    # covers however many files hang off it, and nothing has to be discovered —
+    # no glob, no apex set, no populated graph, just one `File.mtime` per named
+    # node and per node below it that the graph already holds.
     #
     # An unknown path hashes as the empty string, so a page keeps busting when
-    # an asset it links is deleted or renamed away.
+    # an asset it links is deleted or renamed away. What this cannot cover is a
+    # page that renders a listing of whatever the handler holds — the
+    # modulepreload tags — because that depends on which files exist, not only
+    # on the ones named here. Use #digest for those.
     def digest_for(url_paths)
       combined = Digest::SHA256.new
       url_paths.map { |path| path.sub(%r{\A/}, "") }.uniq.sort.each do |url_path|
