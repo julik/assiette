@@ -97,6 +97,47 @@ class AssetHandlerTest < ActiveSupport::TestCase
     end
   end
 
+  # --- files that go away while the server is up ---
+  #
+  # A module the graph knows about can be deleted or renamed between two
+  # renders. The graph only ever reaches an importer from below — through the
+  # files it imports — so a vanished importer lingered as a dependent of its
+  # own leaves, and the next edit to one of those leaves had the graph reading
+  # a path that no longer existed: ENOENT straight out of the view helper, on
+  # every page, until the server was restarted.
+
+  test "js_modules drops a module deleted after the listing was built" do
+    with_files_handler({
+      "js/leaf.js" => "export const a = 1;\n",
+      "js/importer.js" => "import {a} from './leaf.js';\nexport default a;\n"
+    }) do |handler|
+      assert_equal ["/js/importer.js", "/js/leaf.js"], handler.js_modules.map { |m| m[:path] }
+
+      File.delete(handler.resolve_file("js/importer.js"))
+      edit_in_place(handler.resolve_file("js/leaf.js"))
+
+      assert_equal ["/js/leaf.js"], handler.js_modules.map { |m| m[:path] }
+      assert_nil handler.absolute_asset_url_path("js/importer.js")
+      assert handler.digest
+    end
+  end
+
+  test "js_modules follows a module renamed after the listing was built" do
+    with_files_handler({
+      "js/leaf.js" => "export const a = 1;\n",
+      "js/importer.js" => "import {a} from './leaf.js';\nexport default a;\n"
+    }) do |handler|
+      handler.js_modules
+
+      abs = handler.resolve_file("js/importer.js")
+      FileUtils.mv(abs, File.join(File.dirname(abs), "renamed.js"))
+      edit_in_place(handler.resolve_file("js/leaf.js"))
+
+      assert_equal ["/js/leaf.js", "/js/renamed.js"], handler.js_modules.map { |m| m[:path] }.sort
+      assert handler.digest
+    end
+  end
+
   # --- per-file cache busting ---
   #
   # Assiette used to hand every asset one process-wide version tag. In
