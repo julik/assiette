@@ -155,7 +155,7 @@ module Assiette
         end
 
         if existing.stale?
-          rescan_asset!(existing)
+          return nil unless rescan_asset!(existing)
           @checked << url_path
           return existing
         end
@@ -239,9 +239,12 @@ module Assiette
     end
 
     # Re-read a stale asset, re-parse deps, recursively ensure deps fresh, recompute digest.
+    # Returns false if the file went away while we were looking at it.
     def rescan_asset!(asset)
       url_path = asset.url_path
-      asset.mtime = File.mtime(asset.abs_path)
+      raw, mtime = read_or_drop!(asset)
+      return false unless raw
+      asset.mtime = mtime
 
       # Remove old reverse links
       asset.deps.each do |dep_path|
@@ -249,8 +252,6 @@ module Assiette
         dep&.dependents&.delete(url_path)
       end
 
-      # Re-parse imports
-      raw = File.read(asset.abs_path)
       asset.deps = parse_deps(url_path, raw)
 
       # Recursively ensure deps are fresh
@@ -267,6 +268,14 @@ module Assiette
     end
 
     # Recompute digests for all transitive dependents of an asset.
+    #
+    # A dependent whose own file has since gone is dropped rather than
+    # recomputed. Nothing ever resolves an orphan from above — it is only
+    # reached from below, through this very walk — so without this a file
+    # renamed away lingers in the graph as an importer, and the next edit to
+    # anything it used to import tries to read a path that is not there. Its
+    # own dependents still have to hear about it: they keep the vanished node
+    # in their deps until they are rescanned, and it rewrites to 00000000 now.
     def propagate_to_dependents!(asset)
       queue = asset.dependents.to_a
       visited = Set.new
@@ -274,8 +283,12 @@ module Assiette
         next unless visited.add?(dep_url)
         dep_asset = @assets[dep_url]
         next unless dep_asset
-        compute_digest_for(dep_url)
         queue.concat(dep_asset.dependents.to_a)
+        if dep_asset.deleted?
+          remove_asset!(dep_url)
+        else
+          compute_digest_for(dep_url)
+        end
       end
     end
 
@@ -289,11 +302,26 @@ module Assiette
       import_paths.map { |p| resolve_import_for(url_path, p) }
     end
 
+    # Reads an asset's bytes, together with the mtime they were read at, and
+    # returns nil after dropping the node if the file is not there any more.
+    #
+    # Every read of a path the graph remembers goes through here. Those paths
+    # come from an earlier request, and while the server is up any of them can
+    # be renamed or deleted between two renders — a disappearance has to read
+    # as "gone from the graph", never as an exception out of a view helper.
+    def read_or_drop!(asset)
+      [File.read(asset.abs_path), File.mtime(asset.abs_path)]
+    rescue Errno::ENOENT
+      remove_asset!(asset.url_path)
+      nil
+    end
+
     def compute_digest_for(url_path)
       asset = @assets[url_path]
       return unless asset
 
-      raw = File.read(asset.abs_path)
+      raw, _mtime = read_or_drop!(asset)
+      return unless raw
       if asset.deps.empty?
         asset.digest = Digest::SHA256.digest(raw)
       else
@@ -307,7 +335,7 @@ module Assiette
       combined = scc.sort.filter_map { |url_path|
         asset = @assets[url_path]
         next unless asset
-        File.read(asset.abs_path)
+        read_or_drop!(asset)&.first
       }.join("\0")
 
       digest = Digest::SHA256.digest(combined)

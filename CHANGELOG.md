@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- **Fix:** deleting or renaming a file while the server was up raised `Errno::ENOENT` out of the view helpers — `assiette_modulepreload_tags` and `assiette_asset_path` — on every subsequent render, until a restart. The graph only ever reaches an importer from below, through the files it imports, so a module that was renamed away lingered in the graph as a dependent of its own leaves; the next edit to one of those leaves had `propagate_to_dependents!` recompute the vanished node and read a path that was no longer there. Such a dependent is now dropped from the graph instead, and its own dependents are still told, so their fingerprints move. Every read of a path the graph remembers now treats a disappearance as "gone from the graph" rather than raising, so a file removed between the existence check and the read cannot reach a template either.
+
 ## 0.6.0
 
 - **Fix:** a fingerprint could lag the bytes it stands for. When a node's dependency was recomputed, the node's own dependents were not told — they compare their deps' digests from before and after their own visit, so a dep already updated during an earlier visit read as unchanged. Deleting `js/leaf/alpha_one.js` left `js/root_a.js` serving an import rewritten to the new `?s=` under its old fingerprint, so no browser holding the old copy ever refetched it. Recomputing a node now propagates to its dependents, as rescanning a stale one already did.
