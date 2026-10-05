@@ -162,6 +162,15 @@ class AssetHandlerTest < ActiveSupport::TestCase
     end
   end
 
+  test "absolute_asset_url_path leaves the URL unversioned when there is no digest" do
+    with_files_handler({"a.css" => "body { color: red; }\n"}) do |handler|
+      handler.dependency_graph.define_singleton_method(:tree_sha) { |_url_path| nil }
+
+      assert_equal "/a.css", handler.absolute_asset_url_path("/a.css"),
+        "a constant ?s= gets cached as if it were a version, and then serves stale bytes"
+    end
+  end
+
   # --- the first render after an edit ---
   #
   # A successful rescan used to return nil, which the graph took to mean the file was gone,

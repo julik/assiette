@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Fix:** since 0.6.1 the first render after editing a file linked it as `?s=00000000`, next to the correct `integrity` for the new bytes, so the browser blocked it. `rescan_asset!` reports whether the file went away while it was being reread, but on success it returned the value of the dependents walk, a `while` loop, which is always `nil` - and `resolve_asset!` took that to mean the file was gone. A successful rescan now returns `true`.
+- When there is no fingerprint to give, `absolute_asset_url_path` returns the URL without `?s=`, and the rewriter leaves a JS import or a CSS `url()` that points at a missing file as it was written. Both used to append `?s=00000000`, which a browser caches under the server's five-day `max-age` like any real version, and keeps serving to every later page that hits the same placeholder.
 
 ## 0.6.1
 

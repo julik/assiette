@@ -44,6 +44,14 @@ class RewriterTest < ActiveSupport::TestCase
     assert_includes result, "./b.js?s=hash_b"
   end
 
+  test "JS: a nil hash leaves the import unversioned" do
+    assert_equal 'import "./a.js"', Assiette::Rewriter.rewrite_js_imports('import "./a.js"') { nil }
+  end
+
+  test "CSS: a nil hash leaves the url unversioned" do
+    assert_equal 'url("./bg.png")', Assiette::Rewriter.rewrite_css_urls('url("./bg.png")') { nil }
+  end
+
   # --- JS import extraction ---
 
   test "extract_js_imports returns array of import paths" do

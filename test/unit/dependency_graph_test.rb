@@ -246,7 +246,7 @@ class DependencyGraphTest < ActiveSupport::TestCase
     end
   end
 
-  test "deleted dep rewrites to 00000000" do
+  test "deleted dep rewrites without a fingerprint" do
     with_tmpdir_handler do |handler, graph|
       abs_leaf = handler.resolve_file("js/leaf/alpha_one.js")
       File.delete(abs_leaf)
@@ -254,7 +254,7 @@ class DependencyGraphTest < ActiveSupport::TestCase
       abs_mid = handler.resolve_file("js/mid/alpha.js")
       raw = File.read(abs_mid)
       rewritten = graph.rewrite_content("js/mid/alpha.js", raw)
-      assert_includes rewritten, "../leaf/alpha_one.js?s=00000000"
+      assert_includes rewritten, %("../leaf/alpha_one.js")
     end
   end
 

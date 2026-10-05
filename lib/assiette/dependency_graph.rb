@@ -278,7 +278,7 @@ module Assiette
     # renamed away lingers in the graph as an importer, and the next edit to
     # anything it used to import tries to read a path that is not there. Its
     # own dependents still have to hear about it: they keep the vanished node
-    # in their deps until they are rescanned, and it rewrites to 00000000 now.
+    # in their deps until they are rescanned, and it rewrites without ?s= now.
     def propagate_to_dependents!(asset)
       queue = asset.dependents.to_a
       visited = Set.new
@@ -354,12 +354,12 @@ module Assiette
       when ".js", ".mjs", ".es"
         Rewriter.rewrite_js_imports(raw_content) do |import_path|
           resolved = resolve_import_for(url_path, import_path)
-          @assets[resolved]&.checksum_tag || "00000000"
+          @assets[resolved]&.checksum_tag
         end
       when ".css"
         Rewriter.rewrite_css_urls(raw_content) do |ref_path|
           resolved = resolve_import_for(url_path, ref_path)
-          @assets[resolved]&.checksum_tag || "00000000"
+          @assets[resolved]&.checksum_tag
         end
       else
         raw_content
