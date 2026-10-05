@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Fix:** since 0.6.1 the first render after editing a file linked it as `?s=00000000`, next to the correct `integrity` for the new bytes, so the browser blocked it. `rescan_asset!` reports whether the file went away while it was being reread, but on success it returned the value of the dependents walk, a `while` loop, which is always `nil` - and `resolve_asset!` took that to mean the file was gone. A successful rescan now returns `true`.
+- When there is no fingerprint to give, `absolute_asset_url_path` returns the URL without `?s=`, and the rewriter leaves a JS import or a CSS `url()` that points at a missing file as it was written. Both used to append `?s=00000000`, which a browser caches under the server's five-day `max-age` like any real version, and keeps serving to every later page that hits the same placeholder.
+
 ## 0.6.1
 
 - **Fix:** deleting or renaming a file while the server was up raised `Errno::ENOENT` out of the view helpers — `assiette_modulepreload_tags` and `assiette_asset_path` — on every subsequent render, until a restart. The graph only ever reaches an importer from below, through the files it imports, so a module that was renamed away lingered in the graph as a dependent of its own leaves; the next edit to one of those leaves had `propagate_to_dependents!` recompute the vanished node and read a path that was no longer there. Such a dependent is now dropped from the graph instead, and its own dependents are still told, so their fingerprints move. Every read of a path the graph remembers now treats a disappearance as "gone from the graph" rather than raising, so a file removed between the existence check and the read cannot reach a template either.

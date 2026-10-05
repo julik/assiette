@@ -91,8 +91,9 @@ module Assiette
     def absolute_asset_url_path(path, script_name = "")
       clean = path.sub(%r{\A/}, "")
       return nil unless resolve_file(clean)
-      hash = @dependency_graph.tree_sha(clean) || "00000000"
-      "#{script_name}/#{clean}?s=#{hash}"
+      # No digest means the file went away mid-call. A constant tag would get cached like a real version
+      hash = @dependency_graph.tree_sha(clean)
+      hash ? "#{script_name}/#{clean}?s=#{hash}" : "#{script_name}/#{clean}"
     end
 
     def asset_integrity(path)

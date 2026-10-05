@@ -138,6 +138,97 @@ class AssetHandlerTest < ActiveSupport::TestCase
     end
   end
 
+  test "a file deleted between two renders reads as gone" do
+    with_files_handler({"a.css" => "body { color: red; }\n"}) do |handler|
+      assert handler.absolute_asset_url_path("/a.css")
+
+      File.delete(handler.resolve_file("a.css"))
+
+      assert_nil handler.absolute_asset_url_path("/a.css")
+      assert_nil handler.asset_integrity("/a.css")
+      assert_nil handler.dependency_graph["a.css"]
+    end
+  end
+
+  test "a file that goes away between the existence check and the read is dropped" do
+    with_files_handler({"a.css" => "body { color: red; }\n"}) do |handler|
+      graph = handler.dependency_graph
+      graph["a.css"].define_singleton_method(:deleted?) { false } # lose the race on purpose
+
+      File.delete(handler.resolve_file("a.css"))
+
+      assert_nil graph["a.css"]
+      assert_nil graph.tree_sha("a.css")
+    end
+  end
+
+  test "absolute_asset_url_path leaves the URL unversioned when there is no digest" do
+    with_files_handler({"a.css" => "body { color: red; }\n"}) do |handler|
+      handler.dependency_graph.define_singleton_method(:tree_sha) { |_url_path| nil }
+
+      assert_equal "/a.css", handler.absolute_asset_url_path("/a.css"),
+        "a constant ?s= gets cached as if it were a version, and then serves stale bytes"
+    end
+  end
+
+  # --- the first render after an edit ---
+  #
+  # A successful rescan used to return nil, which the graph took to mean the file was gone,
+  # so the first URL after every edit came out as ?s=00000000 next to the real integrity.
+
+  test "the first URL after an edit carries the new digest" do
+    with_files_handler({"a.css" => "body { color: red; }\n"}) do |handler|
+      handler.absolute_asset_url_path("/a.css")
+      rewrite_with_new_mtime(handler.resolve_file("a.css"), "body { color: blue; }\n")
+
+      url = handler.absolute_asset_url_path("/a.css")
+      assert_equal "/a.css?s=#{Digest::SHA256.hexdigest("body { color: blue; }\n")[0, 8]}", url
+      assert_equal fingerprint_from_integrity(handler.asset_integrity("/a.css")), url[/s=(\h+)/, 1]
+    end
+  end
+
+  test "the first URLs after editing a CSS file and the image it references are both fresh" do
+    with_files_handler({
+      "a.css" => ".icon { background: url(./icon.svg); }\n",
+      "icon.svg" => "<svg></svg>\n"
+    }) do |handler|
+      css_before = handler.absolute_asset_url_path("/a.css")
+      rewrite_with_new_mtime(handler.resolve_file("icon.svg"), "<svg><g/></svg>\n")
+
+      svg_url = handler.absolute_asset_url_path("/icon.svg")
+      css_url = handler.absolute_asset_url_path("/a.css")
+      assert_equal fingerprint_from_integrity(handler.asset_integrity("/icon.svg")), svg_url[/s=(\h+)/, 1]
+      assert_equal fingerprint_from_integrity(handler.asset_integrity("/a.css")), css_url[/s=(\h+)/, 1]
+      assert_not_equal css_before, css_url, "the url() in the served CSS changed, so must its fingerprint"
+
+      rewrite_with_new_mtime(handler.resolve_file("a.css"), ".icon { background: url(./icon.svg) no-repeat; }\n")
+
+      css_url = handler.absolute_asset_url_path("/a.css")
+      assert_equal fingerprint_from_integrity(handler.asset_integrity("/a.css")), css_url[/s=(\h+)/, 1]
+    end
+  end
+
+  test "the first URLs after editing an imported module and its importer are both fresh" do
+    with_files_handler({
+      "js/leaf.js" => "export const a = 1;\n",
+      "js/importer.js" => "import {a} from './leaf.js';\nexport default a;\n"
+    }) do |handler|
+      importer_before = handler.absolute_asset_url_path("/js/importer.js")
+      rewrite_with_new_mtime(handler.resolve_file("js/leaf.js"), "export const a = 2;\n")
+
+      leaf_url = handler.absolute_asset_url_path("/js/leaf.js")
+      importer_url = handler.absolute_asset_url_path("/js/importer.js")
+      assert_equal fingerprint_from_integrity(handler.asset_integrity("/js/leaf.js")), leaf_url[/s=(\h+)/, 1]
+      assert_equal fingerprint_from_integrity(handler.asset_integrity("/js/importer.js")), importer_url[/s=(\h+)/, 1]
+      assert_not_equal importer_before, importer_url
+
+      rewrite_with_new_mtime(handler.resolve_file("js/importer.js"), "import {a} from './leaf.js';\nexport default a + 1;\n")
+
+      importer_url = handler.absolute_asset_url_path("/js/importer.js")
+      assert_equal fingerprint_from_integrity(handler.asset_integrity("/js/importer.js")), importer_url[/s=(\h+)/, 1]
+    end
+  end
+
   # --- per-file cache busting ---
   #
   # Assiette used to hand every asset one process-wide version tag. In
@@ -448,5 +539,16 @@ class AssetHandlerTest < ActiveSupport::TestCase
   def edit_in_place(abs)
     File.write(abs, File.read(abs) + "\n// edited")
     FileUtils.touch(abs, mtime: Time.now + 1)
+  end
+
+  # Moves the mtime by hand, a coarse filesystem clock can leave it where it was
+  def rewrite_with_new_mtime(abs, contents)
+    mtime = File.mtime(abs) + 10
+    File.write(abs, contents)
+    File.utime(mtime, mtime, abs)
+  end
+
+  def fingerprint_from_integrity(integrity)
+    Base64.strict_decode64(integrity.delete_prefix("sha256-")).unpack1("H8")
   end
 end
