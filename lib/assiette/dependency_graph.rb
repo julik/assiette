@@ -239,7 +239,7 @@ module Assiette
     end
 
     # Re-read a stale asset, re-parse deps, recursively ensure deps fresh, recompute digest.
-    # Returns false if the file went away while we were looking at it.
+    # Returns true, or false if the file went away while we were looking at it.
     def rescan_asset!(asset)
       url_path = asset.url_path
       raw, mtime = read_or_drop!(asset)
@@ -265,6 +265,9 @@ module Assiette
 
       # Propagate to dependents already in the graph
       propagate_to_dependents!(asset)
+
+      # Not the walk's value: a `while` evaluates to nil, which reads as "gone"
+      true
     end
 
     # Recompute digests for all transitive dependents of an asset.
