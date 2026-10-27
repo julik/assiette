@@ -10,12 +10,15 @@ module Assiette
     class Asset
       attr_reader :url_path
       attr_accessor :abs_path, :mtime, :digest, :deps, :dependents
+      # Set only for cycle members, whose served bytes differ from what the shared digest covers
+      attr_accessor :served_digest
 
       def initialize(url_path:, abs_path:, mtime:)
         @url_path = url_path.freeze
         @abs_path = abs_path
         @mtime = mtime
         @digest = nil
+        @served_digest = nil
         @deps = []
         @dependents = Set.new
       end
@@ -27,8 +30,9 @@ module Assiette
 
       # SRI integrity string for integrity= attributes.
       def sri_integrity
-        return nil unless digest
-        "sha256-#{Base64.strict_encode64(digest)}"
+        sri_digest = served_digest || digest
+        return nil unless sri_digest
+        "sha256-#{Base64.strict_encode64(sri_digest)}"
       end
 
       # Whether this asset's file has changed since last scan.
@@ -325,6 +329,7 @@ module Assiette
 
       raw, _mtime = read_or_drop!(asset)
       return unless raw
+      asset.served_digest = nil
       if asset.deps.empty?
         asset.digest = Digest::SHA256.digest(raw)
       else
@@ -334,17 +339,19 @@ module Assiette
     end
 
     # For cyclic dependencies: hash all members' raw contents together.
+    # That shared digest only fingerprints - each member is served rewritten with
+    # its partners' ?s=, so SRI has to be taken over those bytes or the browser refuses it
     def compute_cycle_digests(scc)
-      combined = scc.sort.filter_map { |url_path|
+      raws = scc.sort.each_with_object({}) do |url_path, acc|
         asset = @assets[url_path]
-        next unless asset
-        read_or_drop!(asset)&.first
-      }.join("\0")
+        raw = asset && read_or_drop!(asset)&.first
+        acc[url_path] = raw if raw
+      end
 
-      digest = Digest::SHA256.digest(combined)
-      scc.each do |url_path|
-        asset = @assets[url_path]
-        asset.digest = digest if asset
+      digest = Digest::SHA256.digest(raws.values.join("\0"))
+      raws.each_key { |url_path| @assets[url_path].digest = digest }
+      raws.each do |url_path, raw|
+        @assets[url_path].served_digest = Digest::SHA256.digest(rewrite_content_internal(url_path, raw))
       end
     end
 

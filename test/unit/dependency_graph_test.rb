@@ -284,6 +284,16 @@ class DependencyGraphTest < ActiveSupport::TestCase
     end
   end
 
+  test "the integrity of a cycle member matches the bytes it is served with" do
+    with_cycle_handler do |handler, graph|
+      %w[cycle_a.js cycle_b.js uses_cycle.js].each do |path|
+        served = graph.rewrite_content(path, File.binread(handler.resolve_file(path)))
+        assert_equal "sha256-#{Base64.strict_encode64(Digest::SHA256.digest(served))}", graph.tree_integrity(path),
+          "The browser refuses #{path} otherwise"
+      end
+    end
+  end
+
   test "changing one cycle member updates the other" do
     with_cycle_handler do |handler, graph|
       sha_b_before = graph.tree_sha("cycle_b.js")
