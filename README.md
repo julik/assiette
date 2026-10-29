@@ -93,19 +93,15 @@ import { followProgress } from "@task_progress/task_tree.js"
 
 The files are served at `/@task_progress/...`, and Assiette rewrites the import as it does any other - to the path of that file relative to the importing module, with its fingerprint: `"../@task_progress/task_tree.js?s=1a2b3c4d"`. That is the same URL the gem's own relative imports (`./task_tree.js`) resolve to, so the browser loads each module once, and editing a gem file moves the fingerprint of every app module that imports it. There is no import map to keep, and nothing to pin: the directory is the unit.
 
-In a Rails app the generated initializer exposes whatever is in `config.assiette.exposed`, and a gem adds itself there from its Railtie:
+In a Rails app a gem exposes its directory itself, from its Railtie, and the app does nothing:
 
 ```ruby
-initializer "my_gem.assiette", before: :load_config_initializers do |app|
-  app.config.assiette.exposed["@my_gem"] = MyGem.assets_path if app.config.respond_to?(:assiette)
+initializer "my_gem.assiette" do
+  ActiveSupport.on_load(:assiette) { expose "@my_gem", MyGem.assets_path }
 end
 ```
 
-If your `config/initializers/assiette.rb` was generated before this existed, add the line that reads it after the handler is built:
-
-```ruby
-Rails.application.config.assiette.exposed.each { |handle, directories| handler.expose(handle, directories) }
-```
+Every `Assiette::Server` built with an `AssetHandler` runs the `:assiette` load hooks on it, with the handler as `self` - so the block runs whether the gem loads before Assiette or after, and never runs in an app without Assiette. No constant to check, no initializer order to get right. A Server given a callable, which builds handlers per request, does not run them: call `expose` on those yourself.
 
 - A handle starts with `@`. Exposing it again with the same directories does nothing, so an initializer that runs twice is harmless. Exposing it with other directories replaces the old ones, and warns.
 - `expose("@ui", [theme_dir, base_dir])` searches several directories in the order given. Your own root still comes first, so `app/assets/@my_gem/file.js` overrides the gem's file.

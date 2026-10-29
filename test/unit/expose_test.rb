@@ -100,7 +100,21 @@ class ExposeTest < ActiveSupport::TestCase
     assert_match(/\Asha256-/, @handler.js_modules(exposed: "@lib").first[:integrity])
   end
 
-  test "a Rails app has a place for gems to expose their directories" do
-    assert_kind_of Hash, Rails.application.config.assiette.exposed
+  test "a Server announces its handler to the gems that hook on_load(:assiette)" do
+    # Hooks stay registered for the rest of the run, so they point at a directory that does too
+    gem = File.expand_path("../dummy/vendor/counter_gem", __dir__)
+    ActiveSupport.on_load(:assiette) { expose "@hooked", gem }
+    handler = Assiette::AssetHandler.new(root: @app)
+    Assiette::Server.new(->(_env) { [404, {}, []] }, handler)
+    assert_equal [Pathname.new(gem)], handler.exposed["@hooked"]
+
+    later = Assiette::AssetHandler.new(root: @app)
+    Assiette::Server.new(->(_env) { [404, {}, []] }, later)
+    ActiveSupport.on_load(:assiette) { expose "@late", gem }
+    assert_equal [Pathname.new(gem)], later.exposed["@late"], "a hook registered after the Server was built still runs"
+
+    per_request = Assiette::AssetHandler.new(root: @app)
+    Assiette::Server.new(->(_env) { [404, {}, []] }, ->(_env) { per_request })
+    assert_empty per_request.exposed, "a handler made per request is not announced"
   end
 end
