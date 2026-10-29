@@ -142,12 +142,15 @@ module Assiette
       @dependency_graph.tree_integrity(clean)
     end
 
-    def js_modules
+    # `exposed:` picks the exposed directories to list as well - `true` for all
+    # of them, or a handle or several. Left out by default
+    def js_modules(exposed: false)
       js_glob = "**/*{#{javascript_extensions.map { |ext| case_insensitive(ext) }.join(",")}}"
       # An exposed directory is a library: its modules are fetched as the app's
       # own import them, and preloading all of them would fetch the ones a page
       # never uses - and ones that import names only some pages map
-      @mappings.reject { |prefix, _root| @exposed.key?(prefix) }.flat_map { |prefix, root|
+      wanted = (exposed == true) ? @exposed.keys : Array(exposed).map(&:to_s)
+      @mappings.select { |prefix, _root| !@exposed.key?(prefix) || wanted.include?(prefix) }.flat_map { |prefix, root|
         Dir.glob(File.join(root, js_glob)).filter_map { |abs|
           next unless File.foreach(abs).any? { |line| line.match?(/\A\s*(import|export)\s/) }
           relative = Pathname.new(abs).relative_path_from(root).to_s

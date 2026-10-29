@@ -32,10 +32,13 @@ module Assiette
     # innermost Server in the stack — on purpose. It renders a listing of
     # everything a handler holds, so walking the stack would put one tenant's
     # file list on another tenant's page.
-    def assiette_modulepreload_tags
+    #
+    # Modules of exposed directories are left out unless `exposed:` names them:
+    # `true` for every one, or a handle or several, like `exposed: "@my_gem"`.
+    def assiette_modulepreload_tags(exposed: false)
       entry = assiette_stack.last
       handler = entry[:handler]
-      safe_join(handler.js_modules.map { |mod|
+      safe_join(handler.js_modules(exposed: exposed).map { |mod|
         tag.link(rel: "modulepreload",
           href: handler.absolute_asset_url_path(mod[:path], entry[:script_name]),
           integrity: mod[:integrity], crossorigin: "anonymous")

@@ -88,6 +88,19 @@ class ExposeTest < ActiveSupport::TestCase
     assert_equal ["/js/app.js"], @handler.js_modules.map { |mod| mod[:path] }
   end
 
+  test "modules of exposed directories are listed for preloading when asked for" do
+    other = File.join(@dir, "other")
+    write(other, "x.js", "export const x = 1\n")
+    @handler.expose("@other", other)
+
+    everything = ["/@lib/a.js", "/@lib/b.js", "/@other/x.js", "/js/app.js"]
+    assert_equal everything, @handler.js_modules(exposed: true).map { |mod| mod[:path] }
+    assert_equal ["/@lib/a.js", "/@lib/b.js", "/js/app.js"], @handler.js_modules(exposed: "@lib").map { |mod| mod[:path] }
+    assert_equal everything, @handler.js_modules(exposed: ["@lib", "@other"]).map { |mod| mod[:path] }
+    assert_equal ["/js/app.js"], @handler.js_modules(exposed: "@nothing").map { |mod| mod[:path] }
+    assert_match(/\Asha256-/, @handler.js_modules(exposed: "@lib").first[:integrity])
+  end
+
   test "a Rails app has a place for gems to expose their directories" do
     assert_kind_of Hash, Rails.application.config.assiette.exposed
   end
