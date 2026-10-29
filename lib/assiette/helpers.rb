@@ -34,7 +34,7 @@ module Assiette
     # file list on another tenant's page.
     #
     # Modules of exposed directories are left out unless `exposed:` names them:
-    # `true` for every one, or a handle or several, like `exposed: "@my_gem"`.
+    # `:all` for every one, or a handle or several, like `exposed: "@my_gem"`.
     def assiette_modulepreload_tags(exposed: false)
       entry = assiette_stack.last
       handler = entry[:handler]

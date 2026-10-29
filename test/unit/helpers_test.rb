@@ -95,7 +95,7 @@ class HelpersTest < ActiveSupport::TestCase
 
       assert_not_includes helper.assiette_modulepreload_tags, "/@lib/"
       assert_includes helper.assiette_modulepreload_tags(exposed: "@lib"), "/@lib/outer_module.js?s="
-      assert_includes helper.assiette_modulepreload_tags(exposed: true), "/@lib/outer_module.js?s="
+      assert_includes helper.assiette_modulepreload_tags(exposed: :all), "/@lib/outer_module.js?s="
     end
   end
 

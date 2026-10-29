@@ -94,6 +94,7 @@ class ExposeTest < ActiveSupport::TestCase
     @handler.expose("@other", other)
 
     everything = ["/@lib/a.js", "/@lib/b.js", "/@other/x.js", "/js/app.js"]
+    assert_equal everything, @handler.js_modules(exposed: :all).map { |mod| mod[:path] }
     assert_equal everything, @handler.js_modules(exposed: true).map { |mod| mod[:path] }
     assert_equal ["/@lib/a.js", "/@lib/b.js", "/js/app.js"], @handler.js_modules(exposed: "@lib").map { |mod| mod[:path] }
     assert_equal everything, @handler.js_modules(exposed: ["@lib", "@other"]).map { |mod| mod[:path] }
