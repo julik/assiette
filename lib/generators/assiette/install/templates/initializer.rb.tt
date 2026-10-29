@@ -16,10 +16,9 @@ handler = Assiette::AssetHandler.new(
   }
 )
 
-# Directories gems make available as "@handle/..." - import "@some_gem/file.js"
-# from your own modules. Gems add to this themselves; add your own with
-# handler.expose("@name", path).
-Rails.application.config.assiette.exposed.each { |handle, directories| handler.expose(handle, directories) }
+# Gems that ship JS or CSS for Assiette expose their directories on this
+# handler themselves, as "@some_gem" - import "@some_gem/file.js" from your own
+# modules. Add your own with handler.expose("@name", path).
 
 # Serve files through the shared handler.
 Rails.application.config.middleware.use Assiette::Server, handler

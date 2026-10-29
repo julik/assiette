@@ -18,6 +18,10 @@ module Assiette
     def initialize(app, handler = nil, root: nil, additional_directory_mappings: {})
       @app = app
       @handler = handler || AssetHandler.new(root: root, additional_directory_mappings: additional_directory_mappings)
+      # In Rails a gem exposes its directory from ActiveSupport.on_load(:assiette), which runs on
+      # every handler a Server is built with - whenever the gem's block was registered. A handler
+      # made per request is not announced: the hooks keep every handler they ran on, for ever
+      ActiveSupport.run_load_hooks(:assiette, @handler) if defined?(Assiette::Railtie) && @handler.is_a?(AssetHandler)
     end
 
     def call(env)
