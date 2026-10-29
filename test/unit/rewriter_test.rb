@@ -135,4 +135,15 @@ class RewriterTest < ActiveSupport::TestCase
   def assert_rewrite_css(input, expected)
     assert_equal expected, Assiette::Rewriter.rewrite_css_urls(input) { "abc" }
   end
+
+  test "rewrite_js_imports turns a fingerprinted @handle import into a path relative to the file" do
+    source = %(import "@lib/a.js"\nimport "@lib/sub/b.js")
+    assert_equal %(import "../@lib/a.js?s=abc"\nimport "../@lib/sub/b.js?s=abc"), Assiette::Rewriter.rewrite_js_imports(source, from: "js/app.js") { "abc" }
+    assert_equal %(import "./@lib/a.js?s=abc"), Assiette::Rewriter.rewrite_js_imports(%(import "@lib/a.js"), from: "app.js") { "abc" }
+    assert_equal %(import "./a.js?s=abc"), Assiette::Rewriter.rewrite_js_imports(%(import "@lib/a.js"), from: "@lib/b.js") { "abc" }
+  end
+
+  test "rewrite_js_imports leaves a @handle import it has no fingerprint for as written" do
+    assert_equal %(import "@lib/a.js"), Assiette::Rewriter.rewrite_js_imports(%(import "@lib/a.js"), from: "js/app.js") { nil }
+  end
 end

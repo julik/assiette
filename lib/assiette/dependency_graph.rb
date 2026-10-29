@@ -71,9 +71,12 @@ module Assiette
       self[url_path]&.sri_integrity
     end
 
-    # Resolves a relative import path to a URL path.
+    # Resolves a relative import path to a URL path. An "@handle/..." path is
+    # already one - see AssetHandler#expose
     def resolve_import_for(from_url_path, relative_path)
-      if relative_path.start_with?("/")
+      if relative_path.start_with?("@")
+        relative_path
+      elsif relative_path.start_with?("/")
         relative_path.sub(%r{\A/}, "")
       else
         dir = File.dirname(from_url_path)
@@ -359,7 +362,7 @@ module Assiette
       ext = File.extname(url_path)
       case ext
       when ".js", ".mjs", ".es"
-        Rewriter.rewrite_js_imports(raw_content) do |import_path|
+        Rewriter.rewrite_js_imports(raw_content, from: url_path) do |import_path|
           resolved = resolve_import_for(url_path, import_path)
           @assets[resolved]&.checksum_tag
         end

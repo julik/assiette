@@ -4,6 +4,12 @@ require "rails/railtie"
 
 module Assiette
   class Railtie < ::Rails::Railtie
+    config.assiette = ActiveSupport::OrderedOptions.new
+    # "@handle" => a directory, or several: what the generated initializer
+    # exposes on its handler (see AssetHandler#expose). A gem adds its own from
+    # an initializer that runs before :load_config_initializers
+    config.assiette.exposed = {}
+
     generators do
       require_relative "../generators/assiette/install/install_generator"
     end

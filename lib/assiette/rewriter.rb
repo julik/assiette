@@ -1,11 +1,14 @@
 # frozen_string_literal: true
 
+require "pathname"
+
 module Assiette
   module Rewriter
     # Matches quoted strings that look like relative/absolute JS import paths.
-    # Handles ./  ../  /  but NOT protocol-relative //
+    # Handles ./  ../  /  but NOT protocol-relative //, and "@handle/..." for a
+    # directory exposed with AssetHandler#expose
     # $1 = quote char, $2 = path including extension
-    JS_IMPORT_RE = /(["'])(\.{0,2}\/(?!\/)[^"']*\.(?:js|mjs|es))\1/
+    JS_IMPORT_RE = /(["'])((?:\.{0,2}\/(?!\/)|@[\w.-]+\/)[^"']*\.(?:js|mjs|es))\1/
 
     # Matches url() in CSS with relative/absolute paths.
     # Handles url(./path), url("./path"), url('../path'), url(/path)
@@ -18,13 +21,28 @@ module Assiette
     # Rewrites JS imports with per-import hashes via a block.
     # The block receives the import path and returns the hash for that import,
     # or nil to leave the import unversioned.
-    def rewrite_js_imports(source, &block)
+    #
+    # An "@handle/..." import that gets a hash is also turned into a path
+    # relative to `from` - the URL path of the file being rewritten - since a
+    # browser cannot resolve a bare "@handle" without an import map. Relative,
+    # so it keeps working under whatever SCRIPT_NAME the handler is mounted at.
+    # One that gets no hash is left as written, for an import map to resolve.
+    def rewrite_js_imports(source, from: "", &block)
       source.gsub(JS_IMPORT_RE) do
         quote = $1
         path = $2
         hash = yield(path)
-        hash ? "#{quote}#{path}?s=#{hash}#{quote}" : "#{quote}#{path}#{quote}"
+        next "#{quote}#{path}#{quote}" unless hash
+        path = relative_to(from, path) if path.start_with?("@")
+        "#{quote}#{path}?s=#{hash}#{quote}"
       end
+    end
+
+    # "@x/y.js" as seen from the directory of `from`, always starting with ./
+    # or ../ - "y.js" alone would be a bare specifier again
+    def relative_to(from, path)
+      relative = Pathname.new(path).relative_path_from(Pathname.new(File.dirname(from))).to_s
+      relative.start_with?("../") ? relative : "./#{relative}"
     end
 
     # Rewrites CSS url() references with per-url hashes via a block.

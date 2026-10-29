@@ -15,8 +15,10 @@ module Dummy
     config.load_defaults 7.2
     config.eager_load = false
     config.root = File.expand_path("..", __dir__)
-    config.middleware.use Assiette::Server,
+    # vendor/counter_gem stands in for a gem's directory, exposed as "@counter"
+    config.middleware.use Assiette::Server, Assiette::AssetHandler.new(
       root: File.expand_path("../app/assets", __dir__),
       additional_directory_mappings: {"/" => File.expand_path("../public", __dir__)}
+    ).expose("@counter", File.expand_path("../vendor/counter_gem", __dir__))
   end
 end

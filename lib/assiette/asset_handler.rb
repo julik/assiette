@@ -22,6 +22,9 @@ module Assiette
 
     JS_EXTENSIONS = %w[.js .mjs].to_set.freeze
 
+    # What #expose takes as a handle: "@" and a name, as in "@task_progress"
+    HANDLE_RE = /\A@[a-z0-9][\w.-]*\z/i
+
     attr_reader :dependency_graph
 
     # Every extension this handler serves, as ".ext" => content type. This is
@@ -42,7 +45,38 @@ module Assiette
     def initialize(root:, additional_directory_mappings: {}, content_types: {})
       @content_types = CONTENT_TYPES.merge(content_types.to_h { |ext, type| [normalize_extension(ext), type] }).freeze
       @mappings = build_mappings(root, additional_directory_mappings)
+      @exposed = {}
       @dependency_graph = DependencyGraph.new(self)
+    end
+
+    # Makes a directory - a gem's, say - available as "@handle/...". Its files
+    # are served at /@handle/..., and an import of "@handle/file.js" from any
+    # module this handler serves is rewritten to that file, fingerprinted:
+    #
+    #   handler.expose("@task_progress", TaskProgress.js_path)
+    #   import { followProgress } from "@task_progress/task_tree.js"
+    #
+    # Several directories under one handle are searched in the order given, and
+    # the root still comes first, so the app's own app/assets/@handle/file.js
+    # wins over the one exposed. Exposing the same handle twice raises - two
+    # gems claiming one name is a mistake to hear about, not to settle quietly.
+    #
+    # Call it while setting up, before the handler serves anything.
+    def expose(handle, directories)
+      handle = handle.to_s
+      raise ArgumentError, "#{handle.inspect} is not a handle - it needs to look like \"@name\"" unless handle.match?(HANDLE_RE)
+      raise ArgumentError, "#{handle} is exposed already, from #{@exposed[handle].join(", ")}" if @exposed.key?(handle)
+      roots = Array(directories).map { |dir| Pathname.new(dir).expand_path }
+      @exposed[handle] = roots
+      # A new array rather than appending, so a thread walking the old one is not disturbed
+      @mappings += roots.map { |root| [handle, root] }
+      @watched_directories = nil
+      self
+    end
+
+    # The exposed handles, each with the directories behind it
+    def exposed
+      @exposed.dup
     end
 
     # The content type this handler serves `path` as, or nil if its extension
@@ -104,7 +138,10 @@ module Assiette
 
     def js_modules
       js_glob = "**/*{#{javascript_extensions.map { |ext| case_insensitive(ext) }.join(",")}}"
-      @mappings.flat_map { |prefix, root|
+      # An exposed directory is a library: its modules are fetched as the app's
+      # own import them, and preloading all of them would fetch the ones a page
+      # never uses - and ones that import names only some pages map
+      @mappings.reject { |prefix, _root| @exposed.key?(prefix) }.flat_map { |prefix, root|
         Dir.glob(File.join(root, js_glob)).filter_map { |abs|
           next unless File.foreach(abs).any? { |line| line.match?(/\A\s*(import|export)\s/) }
           relative = Pathname.new(abs).relative_path_from(root).to_s
