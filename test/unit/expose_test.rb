@@ -84,21 +84,19 @@ class ExposeTest < ActiveSupport::TestCase
     assert_nil @handler.resolve_file("@lib/b.js"), "the old directory is gone, not searched second"
   end
 
-  test "modules of an exposed directory are not listed for preloading" do
-    assert_equal ["/js/app.js"], @handler.js_modules.map { |mod| mod[:path] }
-  end
-
-  test "modules of exposed directories are listed for preloading when asked for" do
+  test "modules of exposed directories are listed for preloading, unless left out" do
     other = File.join(@dir, "other")
     write(other, "x.js", "export const x = 1\n")
     @handler.expose("@other", other)
 
     everything = ["/@lib/a.js", "/@lib/b.js", "/@other/x.js", "/js/app.js"]
+    assert_equal everything, @handler.js_modules.map { |mod| mod[:path] }
     assert_equal everything, @handler.js_modules(exposed: :all).map { |mod| mod[:path] }
     assert_equal everything, @handler.js_modules(exposed: true).map { |mod| mod[:path] }
     assert_equal ["/@lib/a.js", "/@lib/b.js", "/js/app.js"], @handler.js_modules(exposed: "@lib").map { |mod| mod[:path] }
     assert_equal everything, @handler.js_modules(exposed: ["@lib", "@other"]).map { |mod| mod[:path] }
     assert_equal ["/js/app.js"], @handler.js_modules(exposed: "@nothing").map { |mod| mod[:path] }
+    assert_equal ["/js/app.js"], @handler.js_modules(exposed: []).map { |mod| mod[:path] }
     assert_match(/\Asha256-/, @handler.js_modules(exposed: "@lib").first[:integrity])
   end
 
