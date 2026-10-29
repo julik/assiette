@@ -89,6 +89,17 @@ class HelpersTest < ActiveSupport::TestCase
     end
   end
 
+  test "assiette_modulepreload_tags preloads exposed directories unless told not to" do
+    with_two_roots do |outer, inner|
+      helper = build_helper([entry(inner.expose("@lib", outer.resolve_file("outer_module.js").dirname))])
+
+      assert_includes helper.assiette_modulepreload_tags, "/@lib/outer_module.js?s="
+      assert_not_includes helper.assiette_modulepreload_tags(exposed: []), "/@lib/"
+      assert_includes helper.assiette_modulepreload_tags(exposed: "@lib"), "/@lib/outer_module.js?s="
+      assert_includes helper.assiette_modulepreload_tags(exposed: :all), "/@lib/outer_module.js?s="
+    end
+  end
+
   private
 
   def entry(handler, script_name = "")
