@@ -19,6 +19,7 @@ class InstallGeneratorTest < Rails::Generators::TestCase
       assert_match(/Assiette::Server/, content)
       assert_match(/app\/assets/, content)
       assert_match(/public/, content)
+      assert_match(/config\.assiette\.exposed\.each \{ \|handle, directories\| handler\.expose\(handle, directories\) \}/, content)
     end
   end
 end

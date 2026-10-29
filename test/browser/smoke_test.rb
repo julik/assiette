@@ -71,4 +71,12 @@ class BrowserSmokeTest < ActionDispatch::IntegrationTest
     # No JS errors should have occurred
     assert_empty @errors, "Expected no JS errors"
   end
+
+  test "a module from an exposed directory runs once, imported by handle and by its neighbour" do
+    @browser.goto("http://127.0.0.1:#{@port}/smoke")
+    deadline = Time.now + 5
+    sleep 0.05 until @console.any? { |m| m.start_with?("counter:") } || Time.now > deadline
+    assert_includes @console, "counter:1:evaluated 1 time(s)"
+    assert_empty @errors, "Expected no JS errors"
+  end
 end

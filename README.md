@@ -78,6 +78,41 @@ Rails.application.config.middleware.use Assiette::Server,
 
 With this setup a file at `vendor/assets/datepicker.js` is served at `/vendor/datepicker.js`, while files in `app/assets` are served from the root (`/application.css`). You can combine multiple mappings in a single middleware instance.
 
+### Exposing a gem's directory as `@handle`
+
+A gem that ships JavaScript or CSS can make its directory available under a handle, and your modules import from it by name:
+
+```ruby
+handler.expose("@task_progress", TaskProgress.js_path)
+```
+
+```js
+// app/assets/js/application.js
+import { followProgress } from "@task_progress/task_tree.js"
+```
+
+The files are served at `/@task_progress/...`, and Assiette rewrites the import as it does any other - to the path of that file relative to the importing module, with its fingerprint: `"../@task_progress/task_tree.js?s=1a2b3c4d"`. That is the same URL the gem's own relative imports (`./task_tree.js`) resolve to, so the browser loads each module once, and editing a gem file moves the fingerprint of every app module that imports it. There is no import map to keep, and nothing to pin: the directory is the unit.
+
+In a Rails app the generated initializer exposes whatever is in `config.assiette.exposed`, and a gem adds itself there from its Railtie:
+
+```ruby
+initializer "my_gem.assiette", before: :load_config_initializers do |app|
+  app.config.assiette.exposed["@my_gem"] = MyGem.assets_path if app.config.respond_to?(:assiette)
+end
+```
+
+If your `config/initializers/assiette.rb` was generated before this existed, add the line that reads it after the handler is built:
+
+```ruby
+Rails.application.config.assiette.exposed.each { |handle, directories| handler.expose(handle, directories) }
+```
+
+- A handle starts with `@`. Exposing it again with the same directories does nothing, so an initializer that runs twice is harmless. Exposing it with other directories replaces the old ones, and warns.
+- `expose("@ui", [theme_dir, base_dir])` searches several directories in the order given. Your own root still comes first, so `app/assets/@my_gem/file.js` overrides the gem's file.
+- Stylesheets and images are reached the same way through the helpers: `assiette_stylesheet_tag("@my_gem/styles.css")`.
+- Modules in an exposed directory are left out of `assiette_modulepreload_tags`. They are a library: the browser fetches the ones your modules actually import.
+- An `@handle/...` import that names nothing exposed is left exactly as written, for an import map to resolve if you have one.
+
 ### Varying the served directories per request
 
 A single `Assiette::Server` is normally built around one `AssetHandler` for the life of the process. If the set of directories you want to serve depends on the request — a multi-tenant app where every tenant has its own asset directory, say — pass something callable instead of a handler. It is called once per request with the Rack `env` and returns the handler to use, or `nil`:
