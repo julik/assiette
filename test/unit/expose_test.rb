@@ -62,11 +62,26 @@ class ExposeTest < ActiveSupport::TestCase
     assert_equal File.join(@app, "@lib/a.js"), @handler.resolve_file("@lib/a.js").to_s
   end
 
-  test "a handle is exposed once, and looks like one" do
-    assert_raises(ArgumentError) { @handler.expose("@lib", @dir) }
+  test "a handle has to look like one" do
     assert_raises(ArgumentError) { @handler.expose("lib", @dir) }
     assert_raises(ArgumentError) { @handler.expose("@", @dir) }
+  end
+
+  test "exposing a handle again with the same directory changes nothing, and says nothing" do
+    _, err = capture_io { @handler.expose("@lib", @gem) }
+    assert_empty err
     assert_equal({"@lib" => [Pathname.new(@gem)]}, @handler.exposed)
+    assert_equal File.join(@gem, "a.js"), @handler.resolve_file("@lib/a.js").to_s
+  end
+
+  test "exposing a handle again from elsewhere replaces it, with a warning" do
+    other = File.join(@dir, "other")
+    write(other, "a.js", "export const a = 'other'\n")
+    _, err = capture_io { @handler.expose("@lib", other) }
+    assert_match(/@lib was exposed from .*gem, and now from .*other instead/, err)
+    assert_equal({"@lib" => [Pathname.new(other)]}, @handler.exposed)
+    assert_equal File.join(other, "a.js"), @handler.resolve_file("@lib/a.js").to_s
+    assert_nil @handler.resolve_file("@lib/b.js"), "the old directory is gone, not searched second"
   end
 
   test "modules of an exposed directory are not listed for preloading" do

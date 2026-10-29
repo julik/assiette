@@ -58,18 +58,24 @@ module Assiette
     #
     # Several directories under one handle are searched in the order given, and
     # the root still comes first, so the app's own app/assets/@handle/file.js
-    # wins over the one exposed. Exposing the same handle twice raises - two
-    # gems claiming one name is a mistake to hear about, not to settle quietly.
+    # wins over the one exposed.
+    #
+    # Exposing a handle again with the same directories does nothing - an
+    # initializer that runs twice is the likely cause, and harmless. With other
+    # directories, the new ones replace the old, with a warning.
     #
     # Call it while setting up, before the handler serves anything.
     def expose(handle, directories)
       handle = handle.to_s
       raise ArgumentError, "#{handle.inspect} is not a handle - it needs to look like \"@name\"" unless handle.match?(HANDLE_RE)
-      raise ArgumentError, "#{handle} is exposed already, from #{@exposed[handle].join(", ")}" if @exposed.key?(handle)
       roots = Array(directories).map { |dir| Pathname.new(dir).expand_path }
+      return self if @exposed[handle] == roots
+      if @exposed.key?(handle)
+        warn "Assiette: #{handle} was exposed from #{@exposed[handle].join(", ")}, and now from #{roots.join(", ")} instead"
+      end
       @exposed[handle] = roots
-      # A new array rather than appending, so a thread walking the old one is not disturbed
-      @mappings += roots.map { |root| [handle, root] }
+      # A new array rather than changing this one, so a thread walking it is not disturbed
+      @mappings = @mappings.reject { |prefix, _root| prefix == handle } + roots.map { |root| [handle, root] }
       @watched_directories = nil
       self
     end

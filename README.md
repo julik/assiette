@@ -107,7 +107,7 @@ If your `config/initializers/assiette.rb` was generated before this existed, add
 Rails.application.config.assiette.exposed.each { |handle, directories| handler.expose(handle, directories) }
 ```
 
-- A handle starts with `@`, and can be exposed once - a second `expose` of the same handle raises, rather than one gem quietly shadowing another.
+- A handle starts with `@`. Exposing it again with the same directories does nothing, so an initializer that runs twice is harmless. Exposing it with other directories replaces the old ones, and warns.
 - `expose("@ui", [theme_dir, base_dir])` searches several directories in the order given. Your own root still comes first, so `app/assets/@my_gem/file.js` overrides the gem's file.
 - Stylesheets and images are reached the same way through the helpers: `assiette_stylesheet_tag("@my_gem/styles.css")`.
 - Modules in an exposed directory are left out of `assiette_modulepreload_tags`. They are a library: the browser fetches the ones your modules actually import.
