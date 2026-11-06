@@ -89,14 +89,18 @@ class HelpersTest < ActiveSupport::TestCase
     end
   end
 
-  test "assiette_modulepreload_tags preloads exposed directories unless told not to" do
+  test "assiette_modulepreload_tags preloads of an exposed directory what the app imports, or all of it on request" do
     with_two_roots do |outer, inner|
-      helper = build_helper([entry(inner.expose("@lib", outer.resolve_file("outer_module.js").dirname))])
+      lib = outer.resolve_file("outer_module.js").dirname
+      File.write(File.join(lib, "unused_module.js"), "export const unused = 1\n")
+      File.write(inner.resolve_file("inner_module.js"), %(import {outer} from "@lib/outer_module.js"\nexport const inner = outer\n))
+      helper = build_helper([entry(inner.expose("@lib", lib))])
 
       assert_includes helper.assiette_modulepreload_tags, "/@lib/outer_module.js?s="
+      assert_not_includes helper.assiette_modulepreload_tags, "/@lib/unused_module.js"
       assert_not_includes helper.assiette_modulepreload_tags(exposed: []), "/@lib/"
-      assert_includes helper.assiette_modulepreload_tags(exposed: "@lib"), "/@lib/outer_module.js?s="
-      assert_includes helper.assiette_modulepreload_tags(exposed: :all), "/@lib/outer_module.js?s="
+      assert_includes helper.assiette_modulepreload_tags(exposed: "@lib"), "/@lib/unused_module.js?s="
+      assert_includes helper.assiette_modulepreload_tags(exposed: :all), "/@lib/unused_module.js?s="
     end
   end
 

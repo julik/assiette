@@ -24,6 +24,8 @@ class ExposeTest < ActiveSupport::TestCase
 
   def served(url_path) = @handler.dependency_graph.rewrite_content(url_path, File.read(@handler.resolve_file(url_path)))
 
+  def paths(modules) = modules.map { |mod| mod[:path] }
+
   test "an exposed directory is served under its handle" do
     assert_equal File.join(@gem, "b.js"), @handler.resolve_file("/@lib/b.js").to_s
     assert_match %r{\A/@lib/b\.js\?s=[0-9a-f]{8}\z}, @handler.absolute_asset_url_path("/@lib/b.js")
@@ -84,20 +86,43 @@ class ExposeTest < ActiveSupport::TestCase
     assert_nil @handler.resolve_file("@lib/b.js"), "the old directory is gone, not searched second"
   end
 
-  test "modules of exposed directories are listed for preloading, unless left out" do
+  test "exposed modules are preloaded when the app's modules reach them, by import or by a literal import()" do
     other = File.join(@dir, "other")
-    write(other, "x.js", "export const x = 1\n")
+    write(other, "x.js", %(import {c} from "@lib/c.js"\nexport const x = c\n)) # reaches across handles
+    write(other, "y.js", "export const y = 2\n")
+    write(@gem, "c.js", "export const c = 3\n")
+    write(@gem, "d.js", "export const d = 4\n")
+    write(@gem, "e.js", "export const e = 5\n")
+    write(@app, "js/app.js", <<~JS)
+      import {b} from "@lib/b.js"
+      import {x} from "@other/x.js"
+      const d = await import("@lib/d.js")
+      const e = await import(`@lib/${name}.js`)
+    JS
     @handler.expose("@other", other)
 
-    everything = ["/@lib/a.js", "/@lib/b.js", "/@other/x.js", "/js/app.js"]
-    assert_equal everything, @handler.js_modules.map { |mod| mod[:path] }
-    assert_equal everything, @handler.js_modules(exposed: :all).map { |mod| mod[:path] }
-    assert_equal everything, @handler.js_modules(exposed: true).map { |mod| mod[:path] }
-    assert_equal ["/@lib/a.js", "/@lib/b.js", "/js/app.js"], @handler.js_modules(exposed: "@lib").map { |mod| mod[:path] }
-    assert_equal everything, @handler.js_modules(exposed: ["@lib", "@other"]).map { |mod| mod[:path] }
-    assert_equal ["/js/app.js"], @handler.js_modules(exposed: "@nothing").map { |mod| mod[:path] }
-    assert_equal ["/js/app.js"], @handler.js_modules(exposed: []).map { |mod| mod[:path] }
-    assert_match(/\Asha256-/, @handler.js_modules(exposed: "@lib").first[:integrity])
+    reached = ["/@lib/a.js", "/@lib/b.js", "/@lib/c.js", "/@lib/d.js", "/@other/x.js", "/js/app.js"]
+    assert_equal reached, paths(@handler.js_modules), "a, c and d are reached only through b, x and import()"
+    assert_equal reached, paths(@handler.js_modules(exposed: :imported))
+    assert_equal (reached + ["/@lib/e.js"]).sort, paths(@handler.js_modules(exposed: "@lib")), "the whole of @lib for the computed import, and what is reached in @other"
+    assert_equal (reached + ["/@lib/e.js", "/@other/y.js"]).sort, paths(@handler.js_modules(exposed: :all))
+    assert_equal (reached + ["/@lib/e.js", "/@other/y.js"]).sort, paths(@handler.js_modules(exposed: ["@lib", "@other"]))
+    assert_equal ["/js/app.js"], paths(@handler.js_modules(exposed: []))
+    assert_equal ["/js/app.js"], paths(@handler.js_modules(exposed: :none))
+    assert_equal reached, paths(@handler.js_modules(exposed: "@nothing")), "an unknown handle lists nothing extra"
+    @handler.js_modules.each { |mod| assert_match(/\Asha256-/, mod[:integrity], mod[:path]) }
+  end
+
+  test "an exposed module nothing imports is served but not preloaded" do
+    write(@gem, "orphan.js", "export const o = 1\n")
+    assert_equal File.join(@gem, "orphan.js"), @handler.resolve_file("/@lib/orphan.js").to_s
+    assert_equal ["/@lib/a.js", "/@lib/b.js", "/js/app.js"], paths(@handler.js_modules)
+  end
+
+  test "the app's own copy under the handle is listed once" do
+    write(@app, "@lib/b.js", "export const b = 'mine'\n")
+    assert_equal ["/@lib/b.js", "/js/app.js"], paths(@handler.js_modules)
+    assert_equal File.join(@app, "@lib/b.js"), @handler.resolve_file("/@lib/b.js").to_s
   end
 
   test "a Server announces its handler to the gems that hook on_load(:assiette)" do

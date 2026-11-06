@@ -33,11 +33,13 @@ module Assiette
     # everything a handler holds, so walking the stack would put one tenant's
     # file list on another tenant's page.
     #
-    # Modules of exposed directories are listed too. `exposed:` narrows them
-    # down to a handle or several, like `exposed: "@my_gem"`, and `exposed: []`
-    # leaves them all out - for a page that would preload a module importing
-    # a name it does not map, React on a page without React, say.
-    def assiette_modulepreload_tags(exposed: :all)
+    # Of the exposed directories (AssetHandler#expose) it lists what the app's
+    # own modules import, directly or down the chain, and nothing else: the
+    # import is the selection. `exposed: "@my_gem"` lists all of that handle
+    # instead, for an `import()` the app computes at run time; `exposed: :all`
+    # lists every exposed module and `exposed: []` none. See
+    # AssetHandler#js_modules.
+    def assiette_modulepreload_tags(exposed: :imported)
       entry = assiette_stack.last
       handler = entry[:handler]
       safe_join(handler.js_modules(exposed: exposed).map { |mod|

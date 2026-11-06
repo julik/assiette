@@ -106,7 +106,7 @@ Every `Assiette::Server` built with an `AssetHandler` runs the `:assiette` load 
 - A handle starts with `@`. Exposing it again with the same directories does nothing, so an initializer that runs twice is harmless. Exposing it with other directories replaces the old ones, and warns.
 - `expose("@ui", [theme_dir, base_dir])` searches several directories in the order given. Your own root still comes first, so `app/assets/@my_gem/file.js` overrides the gem's file.
 - Stylesheets and images are reached the same way through the helpers: `assiette_stylesheet_tag("@my_gem/styles.css")`.
-- `assiette_modulepreload_tags` preloads the modules of exposed directories along with your own. `assiette_modulepreload_tags(exposed: "@my_gem")` narrows that down to the ones a page uses, and `exposed: []` leaves them all out - for a page that would otherwise preload a module importing a name it does not map, like React on a page without React.
+- `assiette_modulepreload_tags` preloads, of an exposed directory, the modules your own modules import - directly, down the chain, or with a literal `import("@my_gem/file.js")` - and nothing else. The import is the selection: a gem that ships ten modules of which you import one gets that one and its dependencies preloaded, with the rest left for whoever links them. An `import()` whose specifier is computed at run time is invisible to the scan, so for that case `assiette_modulepreload_tags(exposed: "@my_gem")` preloads the whole handle. `exposed: :all` preloads every exposed module and `exposed: []` none.
 - An `@handle/...` import that names nothing exposed is left exactly as written, for an import map to resolve if you have one.
 
 ### Varying the served directories per request
@@ -222,7 +222,7 @@ Renders a `<link rel="stylesheet">` tag with `integrity` and `crossorigin` attri
 
 ### `assiette_modulepreload_tags`
 
-Scans the asset roots for `.js`/`.mjs` files containing ES `import`/`export` statements and renders `<link rel="modulepreload">` tags for each, with SRI integrity hashes. Exposed directories are included; `exposed: "@my_gem"` or `exposed: ["@a", "@b"]` picks some of them, `exposed: []` none.
+Scans the asset roots for `.js`/`.mjs` files containing ES `import`/`export` statements and renders `<link rel="modulepreload">` tags for each, with SRI integrity hashes. Of the exposed directories it includes the modules those files import, transitively, static imports and literal `import()` calls alike; `exposed: "@my_gem"` or `exposed: ["@a", "@b"]` includes the whole of those handles instead, `exposed: :all` every exposed module, `exposed: []` none.
 
 Unlike the two helpers above this one does *not* search the stack — it stays scoped to the innermost `Assiette::Server`. It renders a listing of everything a handler holds, and with per-tenant handlers walking the stack would put one tenant's file list on another tenant's page. Mount the Server holding the modules you want preloaded innermost.
 
