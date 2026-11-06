@@ -142,19 +142,37 @@ module Assiette
       @dependency_graph.tree_integrity(clean)
     end
 
-    # `exposed:` picks the exposed directories to list - all of them by default,
-    # a handle or several, or `[]` for none
-    def js_modules(exposed: :all)
-      js_glob = "**/*{#{javascript_extensions.map { |ext| case_insensitive(ext) }.join(",")}}"
-      wanted = (exposed == :all || exposed == true) ? @exposed.keys : Array(exposed).map(&:to_s)
-      @mappings.select { |prefix, _root| !@exposed.key?(prefix) || wanted.include?(prefix) }.flat_map { |prefix, root|
-        Dir.glob(File.join(root, js_glob)).filter_map { |abs|
-          next unless File.foreach(abs).any? { |line| line.match?(/\A\s*(import|export)\s/) }
-          relative = Pathname.new(abs).relative_path_from(root).to_s
-          mod_path = "/#{"#{prefix}/" unless prefix.empty?}#{relative}".squeeze("/")
-          {path: mod_path, integrity: asset_integrity(mod_path)}
-        }
-      }.uniq { |m| m[:path] }.sort_by { |m| m[:path] }
+    # The modules to preload: every module under the handler's own roots, and
+    # of the exposed directories only what those modules reach through their
+    # imports. A static import and a literal `import("...")` count alike, since
+    # the graph records both, so the browser is handed the whole tree up front
+    # and discovers nothing on its own. An app that imports one file of a gem
+    # preloads that file and what it pulls in, and none of the gem's other
+    # modules.
+    #
+    # `exposed:` changes what the exposed directories contribute:
+    #
+    #   :imported           what the own modules reach (the default)
+    #   :all                every module of every exposed directory
+    #   :none, []           nothing
+    #   "@gem", ["@a", ..]  every module of those handles, and in the other
+    #                       handles still what is reached - for an app whose
+    #                       `import()` of a gem file is computed at run time,
+    #                       which no scan can see
+    def js_modules(exposed: :imported)
+      own_mappings, exposed_mappings = @mappings.partition { |prefix, _root| !@exposed.key?(prefix) }
+      own = modules_under(own_mappings)
+      whole_handles, follow_imports = case exposed
+      when :imported then [[], true]
+      when :all, true then [@exposed.keys, false]
+      when :none, nil then [[], false]
+      else
+        handles = Array(exposed).map(&:to_s)
+        [handles, handles.any?]
+      end
+      listed = modules_under(exposed_mappings.select { |mapping| whole_handles.include?(mapping.first) })
+      reached = follow_imports ? exposed_modules_imported_by(own) : []
+      (own + listed + reached).uniq { |m| m[:path] }.sort_by { |m| m[:path] }
     end
 
     # A single 16-char hex hash covering every asset this handler can serve.
@@ -197,6 +215,43 @@ module Assiette
     end
 
     private
+
+    # Every file under `mappings` with a JavaScript extension that imports or
+    # exports something, as {path:, integrity:}
+    def modules_under(mappings)
+      js_glob = "**/*{#{javascript_extensions.map { |ext| case_insensitive(ext) }.join(",")}}"
+      mappings.flat_map { |prefix, root|
+        Dir.glob(File.join(root, js_glob)).filter_map { |abs|
+          next unless File.foreach(abs).any? { |line| line.match?(/\A\s*(import|export)\s/) }
+          relative = Pathname.new(abs).relative_path_from(root).to_s
+          mod_path = "/#{"#{prefix}/" unless prefix.empty?}#{relative}".squeeze("/")
+          {path: mod_path, integrity: asset_integrity(mod_path)}
+        }
+      }
+    end
+
+    # The exposed JavaScript modules reached from `modules` by walking the
+    # graph's deps. Listing `modules` resolved each of them already, so the
+    # walk is over nodes that are in memory, with their mtimes checked.
+    def exposed_modules_imported_by(modules)
+      seen = Set.new
+      queue = modules.map { |m| m[:path].delete_prefix("/") }
+      found = []
+      until queue.empty?
+        url_path = queue.shift
+        next unless seen.add?(url_path)
+        asset = @dependency_graph[url_path]
+        next unless asset
+        found << {path: "/#{url_path}", integrity: asset.sri_integrity} if exposed_javascript?(url_path)
+        queue.concat(asset.deps)
+      end
+      found
+    end
+
+    def exposed_javascript?(url_path)
+      @exposed.each_key.any? { |handle| url_path.start_with?("#{handle}/") } &&
+        javascript_extensions.include?(normalize_extension(File.extname(url_path)))
+    end
 
     # The extensions served as JavaScript: .js and .mjs, plus anything this
     # handler had registered with a JavaScript content type.
