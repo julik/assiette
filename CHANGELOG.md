@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0
+
 - Add `AssetHandler#expose(handle, directories)`, which makes a directory - a gem's, typically - available as `@handle`. Its files are served at `/@handle/...`, and an `import ... from "@handle/file.js"` in any module the handler serves is rewritten to that file's path relative to the importer, fingerprinted. That is the URL the directory's own relative imports resolve to, so each module loads once, and the app's fingerprints cover the exposed files. Several directories under one handle are searched in order; the handler's root still wins. Exposing a handle again with the same directories does nothing; with others it replaces them, and warns. Exposed modules are preloaded by `assiette_modulepreload_tags` along with the app's own. In Rails a gem exposes itself from `ActiveSupport.on_load(:assiette) { expose "@my_gem", dir }`, which every `Assiette::Server` runs on its handler - the app does nothing.
 - `assiette_modulepreload_tags` and `AssetHandler#js_modules` preload, of the exposed directories, only the modules the app's own modules reach through their imports - static or a literal `import()`, which the graph records alike - so a gem exposing ten modules of which the app imports one has that one and its dependencies preloaded, and the browser still gets the whole tree without discovering it. `exposed:` adjusts that: `"@my_gem"` or an array preloads the whole of those handles, for an `import()` the app computes at run time; `:all` preloads every exposed module; `[]` or `:none` leaves them all out.
 
